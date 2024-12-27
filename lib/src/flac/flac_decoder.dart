@@ -243,11 +243,7 @@ class FlacDecoder {
     }
 
     // TODO : this code adds 1s of total execution
-    for (var i = 0; i < subframes.first.length; i++) {
-      for (var j = 0; j < subframes.length; j++) {
-        md5Input.add(subframes[j][i].toSigned(bitDepth!).toBytes(bitDepth));
-      }
-    }
+    _addToMd5(subframes, bitDepth!);
 
     totalSamples += subframes.first.length;
 
@@ -274,6 +270,42 @@ class FlacDecoder {
       crc: crc,
       subframes: subframes,
     );
+  }
+
+  void _addToMd5(List<Int32List> subframes, int bitDepth) {
+    // 1. Pre-allocate a buffer for a frame's worth of data
+    final frameSize =
+        subframes.first.length * subframes.length * (bitDepth ~/ 8);
+    final frameBuffer = Uint8List(frameSize);
+    final byteData = ByteData.view(frameBuffer.buffer);
+
+    int offset = 0;
+    for (var i = 0; i < subframes.first.length; i++) {
+      for (var j = 0; j < subframes.length; j++) {
+        final sample = subframes[j][i];
+
+        // 2. Optimized sample conversion based on bit depth
+        if (bitDepth == 16) {
+          byteData.setInt16(offset, sample, Endian.little);
+          offset += 2;
+        } else if (bitDepth == 24) {
+          // Assuming your toBytes() handles 24-bit by padding to 32-bit
+          byteData.setInt32(offset, sample, Endian.little);
+          offset += 3;
+        } else if (bitDepth == 8) {
+          byteData.setInt8(offset, sample);
+          offset += 1;
+        } else if (bitDepth == 32) {
+          byteData.setInt32(offset, sample, Endian.little);
+          offset += 4;
+        } else {
+          throw Exception("Unsupported bit depth: $bitDepth");
+        }
+      }
+    }
+
+    // 3. Add the entire frame's data to the MD5 input in one go
+    md5Input.add(frameBuffer); // Update the digest directly
   }
 
   /// Check that the decoded samples are correct. We compare the MD5 checksum from the
