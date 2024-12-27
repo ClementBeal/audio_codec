@@ -1,16 +1,22 @@
 name: audio_codec
-description: A starting point for Dart libraries or applications.
+description: A library to decode and perhaps encode audios
 version: 0.0.1
-repository: https://github.com/my_org/my_repo
+homepage: https://clementbeal.github.io/
+repository: https://github.com/ClementBeal/audio_codec
+issue_tracker: https://github.com/ClementBeal/audio_codec/issues
+
+topics:
+  - audio
+  - codec
+  - decoder
+  - encoder
 
 environment:
-  sdk: ^3.5.3
+  sdk: ">=3.0.6 <4.0.0"
 
-# Add regular dependencies here.
 dependencies:
   crypto: ^3.0.6
   convert: ^3.1.2
-  # path: ^1.8.0
 
 dev_dependencies:
   lints: ^4.0.0
