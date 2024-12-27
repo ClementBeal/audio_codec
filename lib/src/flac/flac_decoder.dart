@@ -224,22 +224,11 @@ class FlacDecoder {
     ];
 
     if (channelAssignment == AudioChannelLayout.rightSideStereo) {
-      for (var i = 0; i < subframes[0].length; i++) {
-        subframes[0][i] = subframes[1][i] + subframes[0][i]; // L = R + S
-      }
+      decorrelateRightSide(subframes[1], subframes[0]);
     } else if (channelAssignment == AudioChannelLayout.midSideStereo) {
-      for (var i = 0; i < subframes[0].length; i++) {
-        final m = subframes[0][i];
-        final s = subframes[1][i];
-        final l = (2 * m + s) >> 2;
-        final r = l + s;
-        subframes[0][i] = l;
-        subframes[1][i] = r;
-      }
+      decorrelateMidSide(subframes[0], subframes[1]);
     } else if (channelAssignment == AudioChannelLayout.leftSideStereo) {
-      for (var i = 0; i < subframes[0].length; i++) {
-        subframes[1][i] -= subframes[0][i];
-      }
+      decorrelateLeftSide(subframes[0], subframes[1]);
     }
 
     // TODO : this code adds 1s of total execution
@@ -264,7 +253,7 @@ class FlacDecoder {
       hasBlockingStrategy: blockingStrategy,
       blockSize: blockSizeInInterChannelSamples!,
       samplerate: sampleRate,
-      bitdepth: bitDepth!,
+      bitdepth: bitDepth,
       channels: channelAssignment,
       codedNumber: codedValue,
       crc: crc,
@@ -785,4 +774,27 @@ class FlacFrame {
     required this.crc,
     required this.subframes,
   });
+}
+
+void decorrelateRightSide(Int32List rightChannel, Int32List sideChannel) {
+  for (int i = 0; i < rightChannel.length; i++) {
+    sideChannel[i] = rightChannel[i] + sideChannel[i]; // L = R + S
+  }
+}
+
+void decorrelateLeftSide(Int32List leftChannel, Int32List sideChannel) {
+  for (int i = 0; i < leftChannel.length; i++) {
+    sideChannel[i] -= leftChannel[i]; // R = S - L
+  }
+}
+
+void decorrelateMidSide(Int32List midChannel, Int32List sideChannel) {
+  for (var i = 0; i < midChannel.length; i++) {
+    final m = midChannel[i];
+    final s = sideChannel[i];
+    final l = (2 * m + s) >> 2;
+    final r = l + s;
+    midChannel[i] = l;
+    sideChannel[i] = r;
+  }
 }
