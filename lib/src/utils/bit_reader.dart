@@ -27,8 +27,9 @@ class BitReader {
 
     _fillBuffer(bitCount);
 
-    final int value = _bitBuffer >> (_bitCount - bitCount);
-    _bitBuffer &= (1 << (_bitCount - bitCount)) - 1;
+    // Extract the bits in one step
+    final value =
+        (_bitBuffer >> (_bitCount - bitCount)) & ((1 << bitCount) - 1);
     _bitCount -= bitCount;
     return value;
   }
