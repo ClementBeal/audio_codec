@@ -7,6 +7,18 @@ class BitReader {
 
   BitReader(this._file);
 
+  /// Reads a single bit and returns it as an unsigned integer (0 or 1).
+  int readBit() {
+    if (_bitCount == 0) {
+      _fillBuffer(1); // Ensure there's at least one bit available
+    }
+
+    _bitCount -= 1;
+    final int bit = (_bitBuffer >> _bitCount) & 1;
+    _bitBuffer &= (1 << _bitCount) - 1; // Remove the read bit from the buffer
+    return bit;
+  }
+
   /// Reads [bitCount] bits and returns an unsigned integer.
   int readUnsigned(int bitCount) {
     if (bitCount < 1 || bitCount > 32) {

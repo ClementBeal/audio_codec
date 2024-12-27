@@ -231,7 +231,6 @@ class FlacDecoder {
       decorrelateLeftSide(subframes[0], subframes[1]);
     }
 
-    // TODO : this code adds 1s of total execution
     _addToMd5(subframes, bitDepth!);
 
     totalSamples += subframes.first.length;
@@ -317,21 +316,21 @@ class FlacDecoder {
 
   Int32List _readSubframe(
       BitReader bitReader, int blockSize, int bitdepth, bool isSideChannel) {
-    if (bitReader.readUnsigned(1) == 1) {
+    if (bitReader.readBit() == 1) {
       throw Exception("The first bit of a subframe must be set to 0");
     }
 
     // we want 0xXAAA AAAX
     final subframeType = bitReader.readUnsigned(6);
 
-    final useWastedBits = bitReader.readUnsigned(1) == 1;
+    final useWastedBits = bitReader.readBit() == 1;
 
     int wastedBits = 0;
     final samples = Int32List(blockSize);
 
     if (useWastedBits) {
       wastedBits = 1;
-      while (bitReader.readUnsigned(1) == 0) {
+      while (bitReader.readBit() == 0) {
         wastedBits++;
       }
     }
@@ -421,12 +420,18 @@ class FlacDecoder {
     }
   }
 
-  void _subframeLinear(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples, int subframeType) {
+  void _subframeLinear(
+    BitReader bitReader,
+    int effectiveBitdepth,
+    int wastedBits,
+    int blockSize,
+    List<int> samples,
+    int subframeType,
+  ) {
     // we have to use [linearPredictorOrder] previous samples
     final linearPredictorOrder = subframeType - 31;
 
-    for (var i = 0; i < linearPredictorOrder; i++) {
+    for (int i = 0; i < linearPredictorOrder; i++) {
       samples[i] = bitReader.readSigned(effectiveBitdepth);
     }
 
@@ -477,23 +482,21 @@ class FlacDecoder {
           : (blockSize >> partitionOrder);
 
       final riceParameter = bitReader.readUnsigned(bitToRead);
-      // print("Rice parameter : $riceParameter");
       bool hasEscaped =
           (riceCodeValue == 0) ? riceParameter == 15 : riceParameter == 31;
-      // print("Has escape : $hasEscaped");
 
       if (hasEscaped) {
         bitReader.readSigned(5);
       }
 
-      for (var i = 0; i < totalElementsInPartition; i++) {
+      for (int i = 0; i < totalElementsInPartition; i++) {
         if (hasEscaped) {
           residualSampleValues[residualId++] = bitReader.readSigned(5);
         } else {
           int quotient = 0;
 
           // Decode the quotient (unary part)
-          while (bitReader.readUnsigned(1) == 0) {
+          while (bitReader.readBit() == 0) {
             quotient++;
           }
 
