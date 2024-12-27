@@ -664,7 +664,7 @@ class FlacDecoder {
 
   /// Return true if another frame can be decoded
   bool hasNextFrame() {
-    return bufferedFile.hasMoreData();
+    return totalSamples < result.streamInfoBlock!.totalSamples;
   }
 }
 
