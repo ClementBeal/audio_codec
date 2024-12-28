@@ -4,27 +4,32 @@ import 'dart:typed_data';
 /// A buffered file that minimize the IO
 class Buffer {
   final RandomAccessFile randomAccessFile;
-  final Uint8List _buffer;
-  int _cursor = 0;
-  int _bufferedBytes = 0; // Track how many bytes are actually in the buffer
-  static final int _bufferSize = 16384;
-  late final int filelength;
-  int _positionInFile = 0;
 
-  Buffer({required this.randomAccessFile}) : _buffer = Uint8List(_bufferSize) {
-    filelength = randomAccessFile.lengthSync();
+  /// Contains the data read from the [randomAccessFile]
+  late final Uint8List _buffer;
+
+  /// The position in the [_buffer]
+  /// It helps to know which bytes can be extracted and
+  /// when we should refill the buffer
+  int _cursor = 0;
+
+  /// Track how many bytes are actually in the buffer
+  int _bufferedBytes = 0;
+
+  /// The buffer size. We read [_bufferSize] bytes everytime
+  /// that we refill the buffer
+  static final int _bufferSize = 16384;
+
+  Buffer({required this.randomAccessFile}) {
+    _buffer = Uint8List(_bufferSize);
     _fill();
   }
 
+  /// Refill the [_buffer] with maximum [_bufferSize] bytes
+  /// Reset the [_cursor] on 0
   void _fill() {
     _bufferedBytes = randomAccessFile.readIntoSync(_buffer);
-    _positionInFile += _bufferSize;
     _cursor = 0;
-  }
-
-  /// Return the position of where is pointing the buffer's cursor
-  int cursorPosition() {
-    return randomAccessFile.positionSync() - (_bufferSize - _cursor);
   }
 
   /// Read [size] bytes from the buffer
@@ -35,18 +40,27 @@ class Buffer {
     if (size > _bufferSize) {
       final result = Uint8List(size);
       final remaining = _bufferedBytes - _cursor;
+
       if (remaining > 0) {
         result.setRange(0, remaining, _buffer, _cursor);
       }
+
       randomAccessFile.readIntoSync(result, remaining);
-      _positionInFile = randomAccessFile.positionSync();
       _fill();
+
       return result;
     }
 
+    // If we have enough data in the buffer
     if (size <= _bufferedBytes - _cursor) {
       // Data fits within the current buffer
-      final result = _buffer.sublist(_cursor, _cursor + size);
+      final result = Uint8List(size);
+
+      for (var i = 0; i < size; i++) {
+        result[i] = _buffer[_cursor + i];
+      }
+
+      // _buffer.sublist(_cursor, _cursor + size);
       _cursor += size;
       return result;
     } else {
@@ -83,7 +97,6 @@ class Buffer {
   /// Refill the buffer
   void setPositionSync(int position) {
     randomAccessFile.setPositionSync(position);
-    _positionInFile = position;
     _fill();
   }
 
@@ -102,14 +115,8 @@ class Buffer {
       int currentPosition = randomAccessFile.positionSync() - remainingInBuffer;
       // Skip to the new position
       randomAccessFile.setPositionSync(currentPosition + length);
-      _positionInFile = currentPosition + length;
       // Refill the buffer at the new position
       _fill();
     }
-  }
-
-  /// Check if the buffer cursor has reached the end of file
-  bool hasMoreData() {
-    return _positionInFile < filelength;
   }
 }
