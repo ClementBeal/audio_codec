@@ -177,7 +177,7 @@ class FlacDecoder {
     final secondPackage = bufferedFile.read(1)[0];
     bytes.add(secondPackage);
 
-    int? blockSizeInInterChannelSamples = _decodeBlockSize(secondPackage >> 4);
+    int blockSizeInInterChannelSamples = _decodeBlockSize(secondPackage >> 4);
     final sampleRate = _decodeSampleRateBit(secondPackage & 0x0F) ?? -1;
 
     final thirdPackage = bufferedFile.read(1)[0];
@@ -196,7 +196,7 @@ class FlacDecoder {
     bytes.addAll(codedValueBytes);
 
     // if the block size is undefined, we take the 8/16 bits after the coded value
-    if ((blockSizeInInterChannelSamples ?? 0) < 0) {
+    if (blockSizeInInterChannelSamples < 0) {
       if (secondPackage >> 4 == 6) {
         final blockSize = bufferedFile.read(1)[0];
         blockSizeInInterChannelSamples = blockSize + 1;
@@ -221,7 +221,7 @@ class FlacDecoder {
 
     List<Samples> subframes = [
       for (int i = 0; i < channelAssignment.nbChannels; i++)
-        _readSubframe(bitReader, blockSizeInInterChannelSamples!, bitDepth!,
+        _readSubframe(bitReader, blockSizeInInterChannelSamples, bitDepth!,
             _isSideChannel(i, channelAssignment))
     ];
 
@@ -252,7 +252,7 @@ class FlacDecoder {
     return FlacFrame(
       hasBitReserved: bitIsReserved,
       hasBlockingStrategy: blockingStrategy,
-      blockSize: blockSizeInInterChannelSamples!,
+      blockSize: blockSizeInInterChannelSamples,
       samplerate: sampleRate,
       bitdepth: bitDepth,
       channels: channelAssignment,
@@ -581,7 +581,7 @@ class FlacDecoder {
     return (value, readBytes);
   }
 
-  int? _decodeBlockSize(int value) {
+  int _decodeBlockSize(int value) {
     if (value < 0 || value > 0xF) {
       throw Exception(
           "Block size value should be between 0 and 15 (4 bits). Current value : $value");
@@ -589,7 +589,8 @@ class FlacDecoder {
 
     return switch (value) {
       // reserved
-      0 => null,
+      0 => throw Exception(
+          "This block size value is reserved. 0b000 can't be used."),
       1 => 192,
       // original formula => 144 * (2^value)
       2 || 3 || 4 || 5 => 576 << (value - 2),
