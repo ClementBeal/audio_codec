@@ -8,3 +8,4 @@ pubspec.lock
 
 # Custom file that I use to test
 a.dart 
+*.exe
