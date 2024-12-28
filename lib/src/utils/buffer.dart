@@ -53,14 +53,12 @@ class Buffer {
 
     // If we have enough data in the buffer
     if (size <= _bufferedBytes - _cursor) {
-      // Data fits within the current buffer
       final result = Uint8List(size);
 
-      for (var i = 0; i < size; i++) {
+      for (int i = 0; i < size; i++) {
         result[i] = _buffer[_cursor + i];
       }
 
-      // _buffer.sublist(_cursor, _cursor + size);
       _cursor += size;
       return result;
     } else {
@@ -68,27 +66,33 @@ class Buffer {
       final result = Uint8List(size);
       int remaining = _bufferedBytes - _cursor;
       // Copy remaining data from the buffer
-      result.setRange(0, remaining, _buffer, _cursor);
 
-      // Refill the buffer and adjust the cursor
-      _fill();
+      for (var i = 0; i < remaining; i++) {
+        result[i] = _buffer[_cursor + i];
+      }
+
+      // Adjust the cursor. Stores the total bytes we have
+      // transfer to the result buffer
       int filled = remaining;
 
       // Continue filling `result` with new buffer data
       while (filled < size) {
+        _fill();
+
         int toCopy = size - filled;
+
         if (toCopy > _bufferedBytes) {
           toCopy = _bufferedBytes;
         }
-        result.setRange(filled, filled + toCopy, _buffer, 0);
+
+        for (var i = filled; i < filled + toCopy; i++) {
+          result[i] = _buffer[i - filled];
+        }
+
         filled += toCopy;
         _cursor = toCopy;
-
-        // Fill buffer again if more data is needed
-        if (filled < size) {
-          _fill();
-        }
       }
+
       return result;
     }
   }
