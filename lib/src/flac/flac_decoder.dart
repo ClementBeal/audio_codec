@@ -260,7 +260,7 @@ class FlacDecoder {
     );
   }
 
-  void _addToMd5(List<Int32List> subframes, int bitDepth) {
+  Future<void> _addToMd5(List<Int32List> subframes, int bitDepth) async {
     // 1. Pre-allocate a buffer for a frame's worth of data
     final frameSize =
         subframes.first.length * subframes.length * (bitDepth ~/ 8);
