@@ -9,7 +9,6 @@ void main(List<String> args) {
 
   runFlacBenchmark();
 }
-// subprocess.check_call(['hyperfine', '-m', '20', f'{ffmpeg} -threads 1 -benchmark -v 0 -i {filepath} -f null -', f'{symphonia} --decode-only {filepath}'])
 
 void runBenchmark(String title, String filepath) {
   print("------- $title -------\n");
