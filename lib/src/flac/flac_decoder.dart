@@ -9,6 +9,8 @@ import 'package:crypto/crypto.dart';
 
 import 'package:audio_codec/src/utils/number.dart';
 
+typedef Samples = Int32List;
+
 /// Contains all the metadata information that can be useful
 class FlacResult {
   StreamInfo? streamInfoBlock;
@@ -217,7 +219,7 @@ class FlacDecoder {
 
     final bitReader = BitReader(bufferedFile);
 
-    List<Int32List> subframes = [
+    List<Samples> subframes = [
       for (int i = 0; i < channelAssignment.nbChannels; i++)
         _readSubframe(bitReader, blockSizeInInterChannelSamples!, bitDepth!,
             _isSideChannel(i, channelAssignment))
@@ -260,7 +262,7 @@ class FlacDecoder {
     );
   }
 
-  Future<void> _addToMd5(List<Int32List> subframes, int bitDepth) async {
+  Future<void> _addToMd5(List<Samples> subframes, int bitDepth) async {
     // 1. Pre-allocate a buffer for a frame's worth of data
     final frameSize =
         subframes.first.length * subframes.length * (bitDepth ~/ 8);
@@ -314,7 +316,7 @@ class FlacDecoder {
     };
   }
 
-  Int32List _readSubframe(
+  Samples _readSubframe(
       BitReader bitReader, int blockSize, int bitdepth, bool isSideChannel) {
     if (bitReader.readBit() == 1) {
       throw Exception("The first bit of a subframe must be set to 0");
@@ -326,7 +328,7 @@ class FlacDecoder {
     final useWastedBits = bitReader.readBit() == 1;
 
     int wastedBits = 0;
-    final samples = Int32List(blockSize);
+    final samples = Samples(blockSize);
 
     if (useWastedBits) {
       wastedBits = 1;
@@ -373,12 +375,10 @@ class FlacDecoder {
   }
 
   void _subframeFixed(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples, int subframeOrder) {
+      int wastedBits, int blockSize, Samples samples, int subframeOrder) {
     final order = subframeOrder - 8;
 
-    for (int i = 0; i < order; i++) {
-      samples[i] = bitReader.readSigned(effectiveBitdepth) << wastedBits;
-    }
+    _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits, order, samples);
 
     final residualSampleValues = _decodeRiceCode(bitReader, blockSize, order);
 
@@ -431,14 +431,13 @@ class FlacDecoder {
     // we have to use [linearPredictorOrder] previous samples
     final linearPredictorOrder = subframeType - 31;
 
-    for (int i = 0; i < linearPredictorOrder; i++) {
-      samples[i] = bitReader.readSigned(effectiveBitdepth);
-    }
+    _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits,
+        linearPredictorOrder, samples);
 
     final coefficientPrecision = bitReader.readUnsigned(4) + 1;
     final rightShiftNeeded = bitReader.readSigned(5);
 
-    final coefficients = Int32List(linearPredictorOrder);
+    final coefficients = Samples(linearPredictorOrder);
 
     for (int i = 0; i < linearPredictorOrder; i++) {
       coefficients[i] = bitReader.readSigned(coefficientPrecision);
@@ -456,7 +455,7 @@ class FlacDecoder {
     }
   }
 
-  Int32List _decodeRiceCode(
+  Samples _decodeRiceCode(
       BitReader bitReader, int blockSize, int predictorOrder) {
     final nbResidualValues = blockSize - predictorOrder;
     final riceCodeValue = bitReader.readUnsigned(2);
@@ -471,7 +470,7 @@ class FlacDecoder {
 
     final totalPartitions = 1 << partitionOrder;
 
-    final residualSampleValues = Int32List(nbResidualValues);
+    final residualSampleValues = Samples(nbResidualValues);
     int residualId = 0;
 
     for (int actualPartition = 0;
@@ -764,7 +763,7 @@ class FlacFrame {
   final AudioChannelLayout channels;
   final int codedNumber;
   final int crc;
-  final List<Int32List> subframes;
+  final List<Samples> subframes;
 
   FlacFrame({
     required this.hasBitReserved,
@@ -779,19 +778,19 @@ class FlacFrame {
   });
 }
 
-void decorrelateRightSide(Int32List rightChannel, Int32List sideChannel) {
+void decorrelateRightSide(Samples rightChannel, Samples sideChannel) {
   for (int i = 0; i < rightChannel.length; i++) {
     sideChannel[i] = rightChannel[i] + sideChannel[i]; // L = R + S
   }
 }
 
-void decorrelateLeftSide(Int32List leftChannel, Int32List sideChannel) {
+void decorrelateLeftSide(Samples leftChannel, Samples sideChannel) {
   for (int i = 0; i < leftChannel.length; i++) {
     sideChannel[i] -= leftChannel[i]; // R = S - L
   }
 }
 
-void decorrelateMidSide(Int32List midChannel, Int32List sideChannel) {
+void decorrelateMidSide(Samples midChannel, Samples sideChannel) {
   for (var i = 0; i < midChannel.length; i++) {
     final m = midChannel[i];
     final s = sideChannel[i];
