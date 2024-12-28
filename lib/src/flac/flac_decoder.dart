@@ -221,7 +221,7 @@ class FlacDecoder {
 
     List<Samples> subframes = [
       for (int i = 0; i < channelAssignment.nbChannels; i++)
-        _readSubframe(bitReader, blockSizeInInterChannelSamples, bitDepth!,
+        _readSubframe(bitReader, blockSizeInInterChannelSamples, bitDepth,
             _isSideChannel(i, channelAssignment))
     ];
 
@@ -233,7 +233,7 @@ class FlacDecoder {
       decorrelateLeftSide(subframes[0], subframes[1]);
     }
 
-    _addToMd5(subframes, bitDepth!);
+    _addToMd5(subframes, bitDepth);
 
     totalSamples += subframes.first.length;
 
@@ -641,18 +641,17 @@ class FlacDecoder {
     };
   }
 
-  int? _decodeBitDepth(int value) {
+  int _decodeBitDepth(int value) {
     if (value < 0 || value > 7) {
       throw Exception(
           "Bit depth value should be between 0 and 7 (3 bits). Current value : $value");
     }
 
     return switch (value) {
-      0 => null,
+      0 => result.streamInfoBlock!.bitsPerSample,
       1 => 8,
       2 => 12,
-      // TODO : it's reserved so it can't be null
-      3 => null,
+      3 => throw Exception("Bit depth value is reserved (0b011)"),
       4 => 16,
       5 => 20,
       6 => 24,
