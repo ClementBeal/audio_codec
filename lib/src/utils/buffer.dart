@@ -16,16 +16,27 @@ class Buffer {
   /// Track how many bytes are actually in the buffer
   int _bufferedBytes = 0;
 
-  /// The buffer size. We read [_bufferSize] bytes everytime
+  /// The buffer size. We read [bufferedFile] bytes everytime
   /// that we refill the buffer
-  static final int _bufferSize = 16384;
+  static final int bufferedFile = 16384;
+
+  /// The position of the cursor inside the byte itself
+  /// if the value is 2: it will be here: 0b00000000
+  ///                                         +
+  ///                                        /|\
+  ///                                         |
+  /// The max value is 7 and the min 0
+  int _bitCount = 7;
+
+  int get cursor => _cursor;
+  int get bufferSize => bufferedFile;
 
   Buffer({required this.randomAccessFile}) {
-    _buffer = Uint8List(_bufferSize);
+    _buffer = Uint8List(bufferedFile);
     _fill();
   }
 
-  /// Refill the [_buffer] with maximum [_bufferSize] bytes
+  /// Refill the [_buffer] with maximum [bufferedFile] bytes
   /// Reset the [_cursor] on 0
   void _fill() {
     _bufferedBytes = randomAccessFile.readIntoSync(_buffer);
@@ -37,7 +48,7 @@ class Buffer {
     // if we read something big (~100kb), we can read it directly from file
     // it makes the read faster
     // no need to use the buffer
-    if (size > _bufferSize) {
+    if (size > bufferedFile) {
       final result = Uint8List(size);
       final remaining = _bufferedBytes - _cursor;
 
@@ -121,6 +132,77 @@ class Buffer {
       randomAccessFile.setPositionSync(currentPosition + length);
       // Refill the buffer at the new position
       _fill();
+    }
+  }
+
+  /// Reads a single bit and returns it as an unsigned integer (0 or 1).
+  int readBit() {
+    final int bit = (_buffer[_cursor] >> _bitCount) & 1;
+    _bitCount -= 1;
+    _updateBitCursor();
+
+    return bit;
+  }
+
+  void _updateBitCursor() {
+    if (_bitCount < 0) {
+      _bitCount = 7;
+      _cursor++;
+      if (_cursor >= _bufferedBytes) {
+        _fill();
+      }
+    }
+  }
+
+  int _readBits(int bitCount) {
+    int value = 0;
+    int bitsRemaining = bitCount;
+
+    while (bitsRemaining > 0) {
+      // If we need to refill the buffer
+      if (_cursor >= _bufferedBytes) {
+        _fill();
+      }
+
+      // Calculate how many bits we can read from current byte
+      int bitsToRead =
+          bitsRemaining < (_bitCount + 1) ? bitsRemaining : (_bitCount + 1);
+
+      // Create a mask for the bits we want to read
+      int mask = ((1 << bitsToRead) - 1) << (_bitCount + 1 - bitsToRead);
+
+      // Extract the bits and shift them to their correct position
+      int bits = (_buffer[_cursor] & mask) >> (_bitCount + 1 - bitsToRead);
+
+      // Add these bits to our result
+      value = (value << bitsToRead) | bits;
+
+      // Update our counters
+      _bitCount -= bitsToRead;
+      bitsRemaining -= bitsToRead;
+
+      _updateBitCursor();
+    }
+
+    return value;
+  }
+
+  /// Reads [bitCount] bits and returns an unsigned integer.
+  int readUnsigned(int bitCount) {
+    return _readBits(bitCount);
+  }
+
+  /// Reads [bitCount] bits and returns a signed integer.
+  int readSigned(int bitCount) {
+    final a = _readBits(bitCount);
+
+    return a.toSigned(bitCount);
+  }
+
+  void align() {
+    if (_bitCount < 7) {
+      _bitCount = -1;
+      _updateBitCursor();
     }
   }
 }

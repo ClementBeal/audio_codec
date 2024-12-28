@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:audio_codec/src/utils/bit_reader.dart';
 import 'package:audio_codec/src/utils/buffer.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
 import 'package:convert/convert.dart';
@@ -217,11 +216,9 @@ class FlacDecoder {
           "The checksum of the frame header is not equal to the computed one ($crc != $calculatedCRC)");
     }
 
-    final bitReader = BitReader(bufferedFile);
-
     List<Samples> subframes = [
       for (int i = 0; i < channelAssignment.nbChannels; i++)
-        _readSubframe(bitReader, blockSizeInInterChannelSamples, bitDepth,
+        _readSubframe(bufferedFile, blockSizeInInterChannelSamples, bitDepth,
             _isSideChannel(i, channelAssignment))
     ];
 
@@ -236,6 +233,8 @@ class FlacDecoder {
     _addToMd5(subframes, bitDepth);
 
     totalSamples += subframes.first.length;
+
+    bufferedFile.align();
 
     final frameCRCBytes = bufferedFile.read(2);
 
@@ -317,7 +316,7 @@ class FlacDecoder {
   }
 
   Samples _readSubframe(
-      BitReader bitReader, int blockSize, int bitdepth, bool isSideChannel) {
+      Buffer bitReader, int blockSize, int bitdepth, bool isSideChannel) {
     if (bitReader.readBit() == 1) {
       throw Exception("The first bit of a subframe must be set to 0");
     }
@@ -358,7 +357,7 @@ class FlacDecoder {
     return samples;
   }
 
-  void _subframeConstant(BitReader bitReader, int effectiveBitdepth,
+  void _subframeConstant(Buffer bitReader, int effectiveBitdepth,
       int wastedBits, int blockSize, List<int> samples) {
     final sample = bitReader.readSigned(effectiveBitdepth) << wastedBits;
 
@@ -367,15 +366,15 @@ class FlacDecoder {
     }
   }
 
-  void _subframeVerbatim(BitReader bitReader, int effectiveBitdepth,
+  void _subframeVerbatim(Buffer bitReader, int effectiveBitdepth,
       int wastedBits, int blockSize, List<int> samples) {
     for (var i = 0; i < blockSize; i++) {
       samples[i] = bitReader.readSigned(effectiveBitdepth) << wastedBits;
     }
   }
 
-  void _subframeFixed(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, Samples samples, int subframeOrder) {
+  void _subframeFixed(Buffer bitReader, int effectiveBitdepth, int wastedBits,
+      int blockSize, Samples samples, int subframeOrder) {
     final order = subframeOrder - 8;
 
     _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits, order, samples);
@@ -421,7 +420,7 @@ class FlacDecoder {
   }
 
   void _subframeLinear(
-    BitReader bitReader,
+    Buffer bitReader,
     int effectiveBitdepth,
     int wastedBits,
     int blockSize,
@@ -455,8 +454,7 @@ class FlacDecoder {
     }
   }
 
-  Samples _decodeRiceCode(
-      BitReader bitReader, int blockSize, int predictorOrder) {
+  Samples _decodeRiceCode(Buffer bitReader, int blockSize, int predictorOrder) {
     final nbResidualValues = blockSize - predictorOrder;
     final riceCodeValue = bitReader.readUnsigned(2);
 
