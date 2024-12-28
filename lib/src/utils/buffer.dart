@@ -194,9 +194,7 @@ class Buffer {
 
   /// Reads [bitCount] bits and returns a signed integer.
   int readSigned(int bitCount) {
-    final a = _readBits(bitCount);
-
-    return a.toSigned(bitCount);
+    return _readBits(bitCount).toSigned(bitCount);
   }
 
   void align() {

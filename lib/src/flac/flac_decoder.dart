@@ -358,7 +358,7 @@ class FlacDecoder {
   }
 
   void _subframeConstant(Buffer bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples) {
+      int wastedBits, int blockSize, Samples samples) {
     final sample = bitReader.readSigned(effectiveBitdepth) << wastedBits;
 
     for (var i = 0; i < blockSize; i++) {
@@ -367,7 +367,7 @@ class FlacDecoder {
   }
 
   void _subframeVerbatim(Buffer bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples) {
+      int wastedBits, int blockSize, Samples samples) {
     for (var i = 0; i < blockSize; i++) {
       samples[i] = bitReader.readSigned(effectiveBitdepth) << wastedBits;
     }
@@ -424,7 +424,7 @@ class FlacDecoder {
     int effectiveBitdepth,
     int wastedBits,
     int blockSize,
-    List<int> samples,
+    Samples samples,
     int subframeType,
   ) {
     // we have to use [linearPredictorOrder] previous samples
