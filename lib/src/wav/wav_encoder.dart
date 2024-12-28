@@ -6,104 +6,116 @@ class WavEncoder {
   final int sampleRate;
   final int numChannels;
   final int bitDepth;
+  final int _bytesPerSample;
+  final int _blockAlign;
+  final int _byteRate;
 
+  // Pre-calculate constants in constructor
   WavEncoder({
     required this.sampleRate,
     required this.numChannels,
     required this.bitDepth,
-  }) {
+  })  : _bytesPerSample = bitDepth ~/ 8,
+        _blockAlign = (bitDepth ~/ 8) * numChannels,
+        _byteRate = sampleRate * numChannels * (bitDepth ~/ 8) {
     if (bitDepth % 8 != 0) {
       throw ArgumentError('Bit depth must be a multiple of 8');
     }
   }
 
+  static const _riffHeader = [82, 73, 70, 70]; // "RIFF" in ASCII
+  static const _waveHeader = [87, 65, 86, 69]; // "WAVE" in ASCII
+  static const _fmtHeader = [102, 109, 116, 32]; // "fmt_" in ASCII
+  static const _dataHeader = [100, 97, 116, 97]; // "data" in ASCII
+  static const _fmtChunkSize = 16;
+  static const _pcmAudioFormat = 1;
+
   void encode(File file, List<int> samples) {
     final writer = file.openSync(mode: FileMode.writeOnly);
+    final dataSize = samples.length * _bytesPerSample;
+    final fileSize = 44 + dataSize; // Total size = header (44 bytes) + data
 
-    _writeHeader(writer);
-    _writeFmtChunk(writer);
-    _writeDataChunk(writer, samples);
+    // Write all headers in one go
+    _writeHeaders(writer, fileSize - 8, dataSize);
 
-    // Update the file size and data chunk size
-    _updateHeaderAndChunkSizes(writer, samples);
+    // Process and write samples more efficiently
+    _writeOptimizedData(writer, samples);
 
     writer.closeSync();
   }
 
-  void _writeHeader(RandomAccessFile writer) {
-    writer.writeStringSync("RIFF", encoding: ascii);
-    writer.writeFromSync([0, 0, 0, 0]); // Placeholder for file size
-    writer.writeStringSync("WAVE", encoding: ascii);
+  void _writeHeaders(RandomAccessFile writer, int fileSize, int dataSize) {
+    // Create a single buffer for all headers
+    final headerBuffer = Uint8List(44);
+    var offset = 0;
+
+    // RIFF header
+    headerBuffer.setAll(offset, _riffHeader);
+    offset += 4;
+    headerBuffer.setAll(offset, _intToLittleEndian(fileSize, 4));
+    offset += 4;
+    headerBuffer.setAll(offset, _waveHeader);
+    offset += 4;
+
+    // fmt chunk
+    headerBuffer.setAll(offset, _fmtHeader);
+    offset += 4;
+    headerBuffer.setAll(offset, _intToLittleEndian(_fmtChunkSize, 4));
+    offset += 4;
+    headerBuffer.setAll(offset, _intToLittleEndian(_pcmAudioFormat, 2));
+    offset += 2;
+    headerBuffer.setAll(offset, _intToLittleEndian(numChannels, 2));
+    offset += 2;
+    headerBuffer.setAll(offset, _intToLittleEndian(sampleRate, 4));
+    offset += 4;
+    headerBuffer.setAll(offset, _intToLittleEndian(_byteRate, 4));
+    offset += 4;
+    headerBuffer.setAll(offset, _intToLittleEndian(_blockAlign, 2));
+    offset += 2;
+    headerBuffer.setAll(offset, _intToLittleEndian(bitDepth, 2));
+    offset += 2;
+
+    // data chunk header
+    headerBuffer.setAll(offset, _dataHeader);
+    offset += 4;
+    headerBuffer.setAll(offset, _intToLittleEndian(dataSize, 4));
+
+    // Write entire header at once
+    writer.writeFromSync(headerBuffer);
   }
 
-  void _writeFmtChunk(RandomAccessFile writer) {
-    writer.writeStringSync("fmt ", encoding: ascii);
+  void _writeOptimizedData(RandomAccessFile writer, List<int> samples) {
+    if (_bytesPerSample == 1) {
+      writer.writeFromSync(Uint8ClampedList.fromList(samples));
+      return;
+    }
 
-    // TODO : I didn't find why the chunk size is 16. What does it mean?
-    writer.writeFromSync(_intToLittleEndian(16, 4)); // Chunk size
-    writer.writeFromSync(_intToLittleEndian(1, 2)); // Audio format (PCM)
-    writer.writeFromSync(_intToLittleEndian(numChannels, 2));
-    writer.writeFromSync(_intToLittleEndian(sampleRate, 4));
-    final byteRate = sampleRate * numChannels * (bitDepth ~/ 8);
-    writer.writeFromSync(_intToLittleEndian(byteRate, 4));
-    final blockAlign = numChannels * (bitDepth ~/ 8);
-    writer.writeFromSync(_intToLittleEndian(blockAlign, 2));
-    writer.writeFromSync(_intToLittleEndian(bitDepth, 2));
-  }
+    // For other bit depths, use a pre-allocated buffer
+    final bufferSize = samples.length * _bytesPerSample;
+    final buffer = Uint8List(bufferSize);
+    final minVal = -(1 << (bitDepth - 1));
+    final maxVal = (1 << (bitDepth - 1)) - 1;
 
-  void _writeDataChunk(RandomAccessFile writer, List<int> samples) {
-    writer.writeStringSync("data", encoding: ascii);
-    writer.writeFromSync([0, 0, 0, 0]); // Placeholder for data size
-
-    final bytesPerSample = bitDepth ~/ 8;
-
-    final samplesData = <int>[];
-
+    var bufferIndex = 0;
     for (final sample in samples) {
-      // Handle bit depth and clipping
-      int clippedSample = _clipSample(sample, bitDepth);
+      // Inline sample clipping
+      final clippedSample =
+          sample < minVal ? minVal : (sample > maxVal ? maxVal : sample);
 
-      // Write sample data in little-endian format
-      for (int i = 0; i < bytesPerSample; i++) {
-        samplesData.add((clippedSample >> (i * 8)) & 0xFF);
+      // Unroll the byte writing loop
+      for (var i = 0; i < _bytesPerSample; i++) {
+        buffer[bufferIndex++] = (clippedSample >> (i * 8)) & 0xFF;
       }
     }
 
-    writer.writeFromSync(samplesData);
-  }
-
-  void _updateHeaderAndChunkSizes(RandomAccessFile writer, List<int> samples) {
-    final fileSize = writer.lengthSync();
-    final dataSize = samples.length * (bitDepth ~/ 8);
-
-    writer.setPositionSync(4); // RIFF chunk size
-    writer.writeFromSync(_intToLittleEndian(fileSize - 8, 4));
-
-    writer.setPositionSync(40); // data chunk size
-    writer.writeFromSync(_intToLittleEndian(dataSize, 4));
+    writer.writeFromSync(buffer);
   }
 
   Uint8List _intToLittleEndian(int value, int length) {
     final bytes = Uint8List(length);
-    for (int i = 0; i < length; i++) {
+    for (var i = 0; i < length; i++) {
       bytes[i] = (value >> (i * 8)) & 0xFF;
     }
     return bytes;
-  }
-
-  int _clipSample(int sample, int bitDepth) {
-    if (bitDepth == 8) {
-      // 8-bit samples are unsigned
-      if (sample < 0) return 0;
-      if (sample > 255) return 255;
-      return sample;
-    } else {
-      // Other bit depths are signed
-      final minVal = -(1 << (bitDepth - 1));
-      final maxVal = (1 << (bitDepth - 1)) - 1;
-      if (sample < minVal) return minVal;
-      if (sample > maxVal) return maxVal;
-      return sample;
-    }
   }
 }

@@ -1,13 +1,15 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:audio_codec/src/utils/bit_reader.dart';
+import 'package:audio_codec/src/flac/linear_predictor.dart';
 import 'package:audio_codec/src/utils/buffer.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
 import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
 
 import 'package:audio_codec/src/utils/number.dart';
+
+typedef Samples = Int32List;
 
 /// Contains all the metadata information that can be useful
 class FlacResult {
@@ -175,7 +177,7 @@ class FlacDecoder {
     final secondPackage = bufferedFile.read(1)[0];
     bytes.add(secondPackage);
 
-    int? blockSizeInInterChannelSamples = _decodeBlockSize(secondPackage >> 4);
+    int blockSizeInInterChannelSamples = _decodeBlockSize(secondPackage >> 4);
     final sampleRate = _decodeSampleRateBit(secondPackage & 0x0F) ?? -1;
 
     final thirdPackage = bufferedFile.read(1)[0];
@@ -194,7 +196,7 @@ class FlacDecoder {
     bytes.addAll(codedValueBytes);
 
     // if the block size is undefined, we take the 8/16 bits after the coded value
-    if ((blockSizeInInterChannelSamples ?? 0) < 0) {
+    if (blockSizeInInterChannelSamples < 0) {
       if (secondPackage >> 4 == 6) {
         final blockSize = bufferedFile.read(1)[0];
         blockSizeInInterChannelSamples = blockSize + 1;
@@ -215,41 +217,25 @@ class FlacDecoder {
           "The checksum of the frame header is not equal to the computed one ($crc != $calculatedCRC)");
     }
 
-    final bitReader = BitReader(bufferedFile);
-
-    List<Int32List> subframes = [
+    List<Samples> subframes = [
       for (int i = 0; i < channelAssignment.nbChannels; i++)
-        _readSubframe(bitReader, blockSizeInInterChannelSamples!, bitDepth!,
+        _readSubframe(bufferedFile, blockSizeInInterChannelSamples, bitDepth,
             _isSideChannel(i, channelAssignment))
     ];
 
     if (channelAssignment == AudioChannelLayout.rightSideStereo) {
-      for (var i = 0; i < subframes[0].length; i++) {
-        subframes[0][i] = subframes[1][i] + subframes[0][i]; // L = R + S
-      }
+      decorrelateRightSide(subframes[1], subframes[0]);
     } else if (channelAssignment == AudioChannelLayout.midSideStereo) {
-      for (var i = 0; i < subframes[0].length; i++) {
-        final m = subframes[0][i];
-        final s = subframes[1][i];
-        final l = (2 * m + s) >> 2;
-        final r = l + s;
-        subframes[0][i] = l;
-        subframes[1][i] = r;
-      }
+      decorrelateMidSide(subframes[0], subframes[1]);
     } else if (channelAssignment == AudioChannelLayout.leftSideStereo) {
-      for (var i = 0; i < subframes[0].length; i++) {
-        subframes[1][i] -= subframes[0][i];
-      }
+      decorrelateLeftSide(subframes[0], subframes[1]);
     }
 
-    // TODO : this code adds 1s of total execution
-    for (var i = 0; i < subframes.first.length; i++) {
-      for (var j = 0; j < subframes.length; j++) {
-        md5Input.add(subframes[j][i].toSigned(bitDepth!).toBytes(bitDepth));
-      }
-    }
+    _addToMd5(subframes, bitDepth);
 
     totalSamples += subframes.first.length;
+
+    bufferedFile.align();
 
     final frameCRCBytes = bufferedFile.read(2);
 
@@ -266,14 +252,50 @@ class FlacDecoder {
     return FlacFrame(
       hasBitReserved: bitIsReserved,
       hasBlockingStrategy: blockingStrategy,
-      blockSize: blockSizeInInterChannelSamples!,
+      blockSize: blockSizeInInterChannelSamples,
       samplerate: sampleRate,
-      bitdepth: bitDepth!,
+      bitdepth: bitDepth,
       channels: channelAssignment,
       codedNumber: codedValue,
       crc: crc,
       subframes: subframes,
     );
+  }
+
+  Future<void> _addToMd5(List<Samples> subframes, int bitDepth) async {
+    // 1. Pre-allocate a buffer for a frame's worth of data
+    final frameSize =
+        subframes.first.length * subframes.length * (bitDepth ~/ 8);
+    final frameBuffer = Uint8List(frameSize);
+    final byteData = ByteData.view(frameBuffer.buffer);
+
+    int offset = 0;
+    for (var i = 0; i < subframes.first.length; i++) {
+      for (var j = 0; j < subframes.length; j++) {
+        final sample = subframes[j][i];
+
+        // 2. Optimized sample conversion based on bit depth
+        if (bitDepth == 16) {
+          byteData.setInt16(offset, sample, Endian.little);
+          offset += 2;
+        } else if (bitDepth == 24) {
+          // Assuming your toBytes() handles 24-bit by padding to 32-bit
+          byteData.setInt32(offset, sample, Endian.little);
+          offset += 3;
+        } else if (bitDepth == 8) {
+          byteData.setInt8(offset, sample);
+          offset += 1;
+        } else if (bitDepth == 32) {
+          byteData.setInt32(offset, sample, Endian.little);
+          offset += 4;
+        } else {
+          throw Exception("Unsupported bit depth: $bitDepth");
+        }
+      }
+    }
+
+    // 3. Add the entire frame's data to the MD5 input in one go
+    md5Input.add(frameBuffer); // Update the digest directly
   }
 
   /// Check that the decoded samples are correct. We compare the MD5 checksum from the
@@ -294,23 +316,23 @@ class FlacDecoder {
     };
   }
 
-  Int32List _readSubframe(
-      BitReader bitReader, int blockSize, int bitdepth, bool isSideChannel) {
-    if (bitReader.readUnsigned(1) == 1) {
+  Samples _readSubframe(
+      Buffer bitReader, int blockSize, int bitdepth, bool isSideChannel) {
+    if (bitReader.readBit() == 1) {
       throw Exception("The first bit of a subframe must be set to 0");
     }
 
     // we want 0xXAAA AAAX
     final subframeType = bitReader.readUnsigned(6);
 
-    final useWastedBits = bitReader.readUnsigned(1) == 1;
+    final useWastedBits = bitReader.readBit() == 1;
 
     int wastedBits = 0;
-    final samples = Int32List(blockSize);
+    final samples = Samples(blockSize);
 
     if (useWastedBits) {
       wastedBits = 1;
-      while (bitReader.readUnsigned(1) == 0) {
+      while (bitReader.readBit() == 0) {
         wastedBits++;
       }
     }
@@ -336,8 +358,8 @@ class FlacDecoder {
     return samples;
   }
 
-  void _subframeConstant(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples) {
+  void _subframeConstant(Buffer bitReader, int effectiveBitdepth,
+      int wastedBits, int blockSize, Samples samples) {
     final sample = bitReader.readSigned(effectiveBitdepth) << wastedBits;
 
     for (var i = 0; i < blockSize; i++) {
@@ -345,20 +367,18 @@ class FlacDecoder {
     }
   }
 
-  void _subframeVerbatim(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples) {
+  void _subframeVerbatim(Buffer bitReader, int effectiveBitdepth,
+      int wastedBits, int blockSize, Samples samples) {
     for (var i = 0; i < blockSize; i++) {
       samples[i] = bitReader.readSigned(effectiveBitdepth) << wastedBits;
     }
   }
 
-  void _subframeFixed(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples, int subframeOrder) {
+  void _subframeFixed(Buffer bitReader, int effectiveBitdepth, int wastedBits,
+      int blockSize, Samples samples, int subframeOrder) {
     final order = subframeOrder - 8;
 
-    for (int i = 0; i < order; i++) {
-      samples[i] = bitReader.readSigned(effectiveBitdepth) << wastedBits;
-    }
+    _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits, order, samples);
 
     final residualSampleValues = _decodeRiceCode(bitReader, blockSize, order);
 
@@ -400,19 +420,24 @@ class FlacDecoder {
     }
   }
 
-  void _subframeLinear(BitReader bitReader, int effectiveBitdepth,
-      int wastedBits, int blockSize, List<int> samples, int subframeType) {
+  void _subframeLinear(
+    Buffer bitReader,
+    int effectiveBitdepth,
+    int wastedBits,
+    int blockSize,
+    Samples samples,
+    int subframeType,
+  ) {
     // we have to use [linearPredictorOrder] previous samples
     final linearPredictorOrder = subframeType - 31;
 
-    for (var i = 0; i < linearPredictorOrder; i++) {
-      samples[i] = bitReader.readSigned(effectiveBitdepth);
-    }
+    _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits,
+        linearPredictorOrder, samples);
 
     final coefficientPrecision = bitReader.readUnsigned(4) + 1;
     final rightShiftNeeded = bitReader.readSigned(5);
 
-    final coefficients = Int32List(linearPredictorOrder);
+    final coefficients = Samples(linearPredictorOrder);
 
     for (int i = 0; i < linearPredictorOrder; i++) {
       coefficients[i] = bitReader.readSigned(coefficientPrecision);
@@ -421,17 +446,11 @@ class FlacDecoder {
     final residuals =
         _decodeRiceCode(bitReader, blockSize, linearPredictorOrder);
 
-    for (int i = linearPredictorOrder; i < blockSize; i++) {
-      for (int j = 0; j < linearPredictorOrder; j++) {
-        samples[i] += coefficients[j] * samples[i - 1 - j];
-      }
-      samples[i] = (samples[i] >> rightShiftNeeded) +
-          residuals[i - linearPredictorOrder];
-    }
+    computeLinearPredictor(linearPredictorOrder, blockSize, samples,
+        coefficients, rightShiftNeeded, residuals);
   }
 
-  Int32List _decodeRiceCode(
-      BitReader bitReader, int blockSize, int predictorOrder) {
+  Samples _decodeRiceCode(Buffer bitReader, int blockSize, int predictorOrder) {
     final nbResidualValues = blockSize - predictorOrder;
     final riceCodeValue = bitReader.readUnsigned(2);
 
@@ -445,7 +464,7 @@ class FlacDecoder {
 
     final totalPartitions = 1 << partitionOrder;
 
-    final residualSampleValues = Int32List(nbResidualValues);
+    final residualSampleValues = Samples(nbResidualValues);
     int residualId = 0;
 
     for (int actualPartition = 0;
@@ -456,23 +475,21 @@ class FlacDecoder {
           : (blockSize >> partitionOrder);
 
       final riceParameter = bitReader.readUnsigned(bitToRead);
-      // print("Rice parameter : $riceParameter");
       bool hasEscaped =
           (riceCodeValue == 0) ? riceParameter == 15 : riceParameter == 31;
-      // print("Has escape : $hasEscaped");
 
       if (hasEscaped) {
-        bitReader.readSigned(5);
+        bitReader.readUnsigned(5);
       }
 
-      for (var i = 0; i < totalElementsInPartition; i++) {
+      for (int i = 0; i < totalElementsInPartition; i++) {
         if (hasEscaped) {
           residualSampleValues[residualId++] = bitReader.readSigned(5);
         } else {
           int quotient = 0;
 
           // Decode the quotient (unary part)
-          while (bitReader.readUnsigned(1) == 0) {
+          while (bitReader.readBit() == 0) {
             quotient++;
           }
 
@@ -558,7 +575,7 @@ class FlacDecoder {
     return (value, readBytes);
   }
 
-  int? _decodeBlockSize(int value) {
+  int _decodeBlockSize(int value) {
     if (value < 0 || value > 0xF) {
       throw Exception(
           "Block size value should be between 0 and 15 (4 bits). Current value : $value");
@@ -566,7 +583,8 @@ class FlacDecoder {
 
     return switch (value) {
       // reserved
-      0 => null,
+      0 => throw Exception(
+          "This block size value is reserved. 0b000 can't be used."),
       1 => 192,
       // original formula => 144 * (2^value)
       2 || 3 || 4 || 5 => 576 << (value - 2),
@@ -617,18 +635,17 @@ class FlacDecoder {
     };
   }
 
-  int? _decodeBitDepth(int value) {
+  int _decodeBitDepth(int value) {
     if (value < 0 || value > 7) {
       throw Exception(
           "Bit depth value should be between 0 and 7 (3 bits). Current value : $value");
     }
 
     return switch (value) {
-      0 => null,
+      0 => result.streamInfoBlock!.bitsPerSample,
       1 => 8,
       2 => 12,
-      // TODO : it's reserved so it can't be null
-      3 => null,
+      3 => throw Exception("Bit depth value is reserved (0b011)"),
       4 => 16,
       5 => 20,
       6 => 24,
@@ -640,7 +657,7 @@ class FlacDecoder {
 
   /// Return true if another frame can be decoded
   bool hasNextFrame() {
-    return bufferedFile.hasMoreData();
+    return totalSamples < result.streamInfoBlock!.totalSamples;
   }
 }
 
@@ -740,7 +757,7 @@ class FlacFrame {
   final AudioChannelLayout channels;
   final int codedNumber;
   final int crc;
-  final List<Int32List> subframes;
+  final List<Samples> subframes;
 
   FlacFrame({
     required this.hasBitReserved,
@@ -753,4 +770,27 @@ class FlacFrame {
     required this.crc,
     required this.subframes,
   });
+}
+
+void decorrelateRightSide(Samples rightChannel, Samples sideChannel) {
+  for (int i = 0; i < rightChannel.length; i++) {
+    sideChannel[i] = rightChannel[i] + sideChannel[i]; // L = R + S
+  }
+}
+
+void decorrelateLeftSide(Samples leftChannel, Samples sideChannel) {
+  for (int i = 0; i < leftChannel.length; i++) {
+    sideChannel[i] -= leftChannel[i]; // R = S - L
+  }
+}
+
+void decorrelateMidSide(Samples midChannel, Samples sideChannel) {
+  for (var i = 0; i < midChannel.length; i++) {
+    final m = midChannel[i];
+    final s = sideChannel[i];
+    final l = (m + s) >> 2;
+    final r = l + s;
+    midChannel[i] = l;
+    sideChannel[i] = r;
+  }
 }
