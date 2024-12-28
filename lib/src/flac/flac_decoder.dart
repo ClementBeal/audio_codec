@@ -483,7 +483,7 @@ class FlacDecoder {
           (riceCodeValue == 0) ? riceParameter == 15 : riceParameter == 31;
 
       if (hasEscaped) {
-        bitReader.readSigned(5);
+        bitReader.readUnsigned(5);
       }
 
       for (int i = 0; i < totalElementsInPartition; i++) {

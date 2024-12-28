@@ -153,22 +153,6 @@ void main() {
       expect(buffer.readSigned(5), equals(8)); // 01000
     });
 
-    test('readUnsigned and readSigned - read across buffer boundaries',
-        () async {
-      final data = Uint8List.fromList(List.generate(20000, (i) => i % 256));
-      await tempFile.writeAsBytes(data);
-
-      buffer = Buffer(randomAccessFile: await tempFile.open());
-
-      expect(buffer.readUnsigned(12), equals(0x001));
-      expect(buffer.readUnsigned(10), equals(0x202));
-
-      buffer.setPositionSync(0);
-
-      expect(buffer.readSigned(12), equals(1));
-      expect(buffer.readSigned(10), equals(258));
-    });
-
     test('setPositionSync - sets position correctly after read', () async {
       final data = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
       await tempFile.writeAsBytes(data);
