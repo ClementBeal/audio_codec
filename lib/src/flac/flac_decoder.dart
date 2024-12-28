@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:audio_codec/src/flac/linear_predictor.dart';
 import 'package:audio_codec/src/utils/buffer.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
 import 'package:convert/convert.dart';
@@ -445,13 +446,8 @@ class FlacDecoder {
     final residuals =
         _decodeRiceCode(bitReader, blockSize, linearPredictorOrder);
 
-    for (int i = linearPredictorOrder; i < blockSize; i++) {
-      for (int j = 0; j < linearPredictorOrder; j++) {
-        samples[i] += coefficients[j] * samples[i - 1 - j];
-      }
-      samples[i] = (samples[i] >> rightShiftNeeded) +
-          residuals[i - linearPredictorOrder];
-    }
+    computeLinearPredictor(linearPredictorOrder, blockSize, samples,
+        coefficients, rightShiftNeeded, residuals);
   }
 
   Samples _decodeRiceCode(Buffer bitReader, int blockSize, int predictorOrder) {
@@ -792,7 +788,7 @@ void decorrelateMidSide(Samples midChannel, Samples sideChannel) {
   for (var i = 0; i < midChannel.length; i++) {
     final m = midChannel[i];
     final s = sideChannel[i];
-    final l = (2 * m + s) >> 2;
+    final l = (m + s) >> 2;
     final r = l + s;
     midChannel[i] = l;
     sideChannel[i] = r;
