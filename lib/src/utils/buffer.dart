@@ -36,11 +36,15 @@ class Buffer {
     _fill();
   }
 
+  int get bufferedBytes => _bufferedBytes;
+
   /// Refill the [_buffer] with maximum [bufferedFile] bytes
   /// Reset the [_cursor] on 0
-  void _fill() {
+  bool _fill() {
     _bufferedBytes = randomAccessFile.readIntoSync(_buffer);
     _cursor = 0;
+
+    return _bufferedBytes > 0;
   }
 
   /// Read [size] bytes from the buffer
@@ -88,7 +92,7 @@ class Buffer {
 
       // Continue filling `result` with new buffer data
       while (filled < size) {
-        _fill();
+        if (!_fill()) break;
 
         int toCopy = size - filled;
 
