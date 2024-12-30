@@ -22,8 +22,6 @@ class PcmDecoder {
     for (int i = 0; i < nbChannel; i++) Int32List(samplesPerChannel)
   ];
 
-  int id = 0;
-
   PcmDecoder({
     required File track,
     required this.bitPerSample,
@@ -48,24 +46,40 @@ class PcmDecoder {
 
     int sampleCounter = 0;
 
-    while (id < lengthFile && sampleCounter < samplesPerChannel) {
+    while (sampleCounter < samplesPerChannel) {
       final bytesToRead = bytesPerSamples;
       final data = buffer.read(bytesToRead * nbChannel);
-      id += data.length;
 
       if (data.isEmpty) break;
 
-      if (signedData && bitPerSample == 8) {
-        for (int i = 0; i < data.length; i += bytesPerSamples) {
-          for (int channel = 0; channel < nbChannel; channel++) {
+      if (signedData) {
+        if (bitPerSample == 8) {
+          for (int i = 0; i < data.length; i += bytesPerSamples) {
+            for (int channel = 0; channel < nbChannel; channel++) {
+              if (sampleCounter < samplesPerChannel) {
+                channels[channel][sampleCounter] =
+                    data[i + channel * bytesPerSamples];
+              }
+            }
+
             if (sampleCounter < samplesPerChannel) {
-              channels[channel][sampleCounter] =
-                  data[i + channel * bytesPerSamples];
+              sampleCounter++;
             }
           }
+        }
+      } else {
+        if (bitPerSample == 8) {
+          for (int i = 0; i < data.length; i += bytesPerSamples) {
+            for (int channel = 0; channel < nbChannel; channel++) {
+              if (sampleCounter < samplesPerChannel) {
+                channels[channel][sampleCounter] =
+                    data[i + channel * bytesPerSamples].toSigned(8);
+              }
+            }
 
-          if (sampleCounter < samplesPerChannel) {
-            sampleCounter++;
+            if (sampleCounter < samplesPerChannel) {
+              sampleCounter++;
+            }
           }
         }
       }
