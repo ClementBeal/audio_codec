@@ -64,18 +64,15 @@ class PcmDecoder {
       case PCMDecoderEncoding.signed16bitsBE:
         _signed16BitsBE(data);
       case PCMDecoderEncoding.signed16bitsLE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        _signed16BitsLE(data);
       case PCMDecoderEncoding.signed24bitsBE:
         _signed24BitsBE(data);
       case PCMDecoderEncoding.signed24bitsLE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        _signed24BitsLE(data);
       case PCMDecoderEncoding.signed32bitsBE:
         _signed32BitsBE(data);
       case PCMDecoderEncoding.signed32bitsLE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        _signed32BitsLE(data);
     }
 
     return channels;
@@ -281,6 +278,63 @@ class PcmDecoder {
         }
       }
 
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+
+  void _signed16BitsLE(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 2;
+
+    for (int i = 0; i < data.length; i += nbChannel * bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          int sample = (data[i + channel * bytesPerSamples + 1] << 8) |
+              data[i + channel * bytesPerSamples];
+          channels[channel][sampleCounter] = sample.toSigned(16);
+        }
+      }
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+
+  void _signed24BitsLE(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 3;
+
+    for (int i = 0; i < data.length; i += nbChannel * bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          int sample = (data[i + channel * bytesPerSamples + 2] << 16) |
+              data[i + channel * bytesPerSamples + 1] << 8 |
+              data[i + channel * bytesPerSamples];
+          channels[channel][sampleCounter] = sample.toSigned(24);
+        }
+      }
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+
+  void _signed32BitsLE(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 4;
+
+    for (int i = 0; i < data.length; i += nbChannel * bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          int sample = (data[i + channel * bytesPerSamples + 3] << 24) |
+              data[i + channel * bytesPerSamples + 2] << 16 |
+              data[i + channel * bytesPerSamples + 1] << 8 |
+              data[i + channel * bytesPerSamples];
+          channels[channel][sampleCounter] = sample.toSigned(32);
+        }
+      }
       if (sampleCounter < samplesPerChannel) {
         sampleCounter++;
       }
