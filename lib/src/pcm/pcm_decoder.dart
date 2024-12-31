@@ -2,10 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audio_codec/src/flac/flac_decoder.dart';
-import 'package:audio_codec/src/utils/buffer.dart';
 
 class PcmDecoder {
-  // late Buffer buffer;
   late RandomAccessFile buffer;
 
   final int nbChannel;
@@ -363,4 +361,24 @@ enum PCMDecoderEncoding {
   final int bytesPerSamples;
 
   const PCMDecoderEncoding(this.bytesPerSamples);
+
+  static PCMDecoderEncoding? fromString(String possibleEncoding) {
+    return switch (possibleEncoding) {
+      "u8" => PCMDecoderEncoding.unsigned8bits,
+      "s8" => PCMDecoderEncoding.unsigned8bits,
+      "u16be" => PCMDecoderEncoding.unsigned16bitsBE,
+      "u16le" => PCMDecoderEncoding.unsigned16bitsLE,
+      "s16be" => PCMDecoderEncoding.signed16bitsBE,
+      "s16le" => PCMDecoderEncoding.signed16bitsLE,
+      "u24be" => PCMDecoderEncoding.unsigned24bitsBE,
+      "u24le" => PCMDecoderEncoding.unsigned24bitsLE,
+      "s24be" => PCMDecoderEncoding.signed24bitsBE,
+      "s24le" => PCMDecoderEncoding.signed24bitsLE,
+      "u32be" => PCMDecoderEncoding.unsigned32bitsBE,
+      "u32le" => PCMDecoderEncoding.unsigned32bitsLE,
+      "s32be" => PCMDecoderEncoding.signed32bitsBE,
+      "s32le" => PCMDecoderEncoding.signed32bitsLE,
+      _ => null
+    };
+  }
 }
