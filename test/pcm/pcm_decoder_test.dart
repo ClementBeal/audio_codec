@@ -420,80 +420,80 @@ void main() {
     },
   );
 
-  // group(
-  //   "unsigned 24 bits Big-Endian",
-  //   () {
-  //     tearDown(
-  //       () {
-  //         File("a.pcm").deleteSync();
-  //       },
-  //     );
+  group(
+    "unsigned 24 bits Little-Endian",
+    () {
+      tearDown(
+        () {
+          File("a.pcm").deleteSync();
+        },
+      );
 
-  //     test(
-  //       "1 channel",
-  //       () {
-  //         final a = File("a.pcm");
-  //         a.writeAsBytesSync([0x0B, 0x2A, 0x23]);
+      test(
+        "1 channel",
+        () {
+          final a = File("a.pcm");
+          a.writeAsBytesSync([0x0B, 0x2A, 0x23]);
 
-  //         final decoder = PcmDecoder(
-  //           track: a,
-  //           sampleRate: 44100,
-  //           nbChannel: 1,
-  //           encoding: PCMDecoderEncoding.unsigned24bitsBE,
-  //         );
+          final decoder = PcmDecoder(
+            track: a,
+            sampleRate: 44100,
+            nbChannel: 1,
+            encoding: PCMDecoderEncoding.unsigned24bitsLE,
+          );
 
-  //         final channels = decoder.decode();
+          final channels = decoder.decode();
 
-  //         expect(channels.length, 1);
-  //         expect(channels[0], [0x0B2A23]);
-  //       },
-  //     );
+          expect(channels.length, 1);
+          expect(channels[0], [0x232A0B]);
+        },
+      );
 
-  //     test(
-  //       "2 channels",
-  //       () {
-  //         final a = File("a.pcm");
-  //         a.writeAsBytesSync([0x0B, 0x2A, 0x23, 0x11, 0x54, 0x98]);
+      test(
+        "2 channels",
+        () {
+          final a = File("a.pcm");
+          a.writeAsBytesSync([0x0B, 0x2A, 0x23, 0x11, 0x54, 0x98]);
 
-  //         final decoder = PcmDecoder(
-  //           track: a,
-  //           sampleRate: 44100,
-  //           nbChannel: 2,
-  //           encoding: PCMDecoderEncoding.unsigned24bitsBE,
-  //         );
+          final decoder = PcmDecoder(
+            track: a,
+            sampleRate: 44100,
+            nbChannel: 2,
+            encoding: PCMDecoderEncoding.unsigned24bitsLE,
+          );
 
-  //         final channels = decoder.decode();
+          final channels = decoder.decode();
 
-  //         expect(channels.length, 2);
-  //         expect(channels[0], [0x0B2A23]);
-  //         expect(channels[1], [0x115498]);
-  //       },
-  //     );
+          expect(channels.length, 2);
+          expect(channels[0], [0x232A0B]);
+          expect(channels[1], [0x985411]);
+        },
+      );
 
-  //     test(
-  //       "3 channels",
-  //       () {
-  //         final a = File("a.pcm");
-  //         a.writeAsBytesSync(
-  //             [0x0B, 0x2A, 0x23, 0x11, 0x12, 0x98, 0x32, 0x11, 0x84]);
+      test(
+        "3 channels",
+        () {
+          final a = File("a.pcm");
+          a.writeAsBytesSync(
+              [0x0B, 0x2A, 0x23, 0x11, 0x12, 0x98, 0x32, 0x11, 0x84]);
 
-  //         final decoder = PcmDecoder(
-  //           track: a,
-  //           sampleRate: 44100,
-  //           nbChannel: 3,
-  //           encoding: PCMDecoderEncoding.unsigned24bitsBE,
-  //         );
+          final decoder = PcmDecoder(
+            track: a,
+            sampleRate: 44100,
+            nbChannel: 3,
+            encoding: PCMDecoderEncoding.unsigned24bitsLE,
+          );
 
-  //         final channels = decoder.decode();
+          final channels = decoder.decode();
 
-  //         expect(channels.length, 3);
-  //         expect(channels[0], [0x0B2A23]);
-  //         expect(channels[1], [0x111298]);
-  //         expect(channels[2], [0x321184]);
-  //       },
-  //     );
-  //   },
-  // );
+          expect(channels.length, 3);
+          expect(channels[0], [0x232A0B]);
+          expect(channels[1], [0x981211]);
+          expect(channels[2], [0x841132]);
+        },
+      );
+    },
+  );
 
   // group(
   //   "unsigned 32 bits Big-Endian",
