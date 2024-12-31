@@ -1,3 +1,7 @@
+## 0.0.2
+
+- Add PCM decoder
+
 ## 0.0.1
 
 - Decode Flac files

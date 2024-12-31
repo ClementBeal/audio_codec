@@ -6,13 +6,13 @@ A Dart library for decoding (and potentially encoding) audio files. This package
 
 ## Codecs Support
 
-| Codec    | Decoding Status | Encoding Status | Notes                                                       |
-| -------- | --------------- | --------------- | ----------------------------------------------------------- |
-| FLAC     | Good            | -               | Decoding is functional, may have some minor audio glitches. |
-| MP3      | -               | -               | Not yet implemented.                                        |
-| OPUS     | -               | -               | Not yet implemented.                                        |
-| WAV      | -               | Good            | Writing is supported.                                       |
-
+| Codec | Decoding Status | Encoding Status | Notes                                                       |
+| ----- | --------------- | --------------- | ----------------------------------------------------------- |
+| FLAC  | Good            | -               | Decoding is functional, may have some minor audio glitches. |
+| MP3   | -               | -               | Not yet implemented.                                        |
+| OPUS  | -               | -               | Not yet implemented.                                        |
+| WAV   | -               | Good            | Writing is supported.                                       |
+| PCM   | Excellent       | -               |                                                             |
 
 ## Status Levels
 
