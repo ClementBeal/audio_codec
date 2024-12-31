@@ -216,7 +216,15 @@ class PcmDecoder {
       for (int channel = 0; channel < nbChannel; channel++) {
         if (sampleCounter < samplesPerChannel) {
           channels[channel][sampleCounter] =
-              data[i + channel * bytesPerSamples].toSigned(8);
+              data[i * nbChannel + channel * bytesPerSamples].toSigned(8);
+        }
+      }
+
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
         }
       }
 

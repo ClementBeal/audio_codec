@@ -572,4 +572,82 @@ void main() {
       );
     },
   );
+
+  group(
+    "signed 8 bits",
+    () {
+      tearDown(
+        () {
+          File("a.pcm").deleteSync();
+        },
+      );
+
+      test(
+        "1 channel",
+        () {
+          final a = File("a.pcm");
+          a.writeAsBytesSync([0, 123, 255, 11]);
+
+          final decoder = PcmDecoder(
+            track: a,
+            sampleRate: 44100,
+            nbChannel: 1,
+            encoding: PCMDecoderEncoding.signed8bits,
+          );
+
+          final channels = decoder.decode();
+
+          expect(channels.length, 1);
+          expect(channels[0], [
+            0.toSigned(8),
+            123.toSigned(8),
+            255.toSigned(8),
+            11.toSigned(8)
+          ]);
+        },
+      );
+
+      test(
+        "2 channels",
+        () {
+          final a = File("a.pcm");
+          a.writeAsBytesSync([0, 123, 255, 11]);
+
+          final decoder = PcmDecoder(
+            track: a,
+            sampleRate: 44100,
+            nbChannel: 2,
+            encoding: PCMDecoderEncoding.signed8bits,
+          );
+
+          final channels = decoder.decode();
+
+          expect(channels.length, 2);
+          expect(channels[0], [0.toSigned(8), 255.toSigned(8)]);
+          expect(channels[1], [123.toSigned(8), 11.toSigned(8)]);
+        },
+      );
+      test(
+        "3 channels",
+        () {
+          final a = File("a.pcm");
+          a.writeAsBytesSync([0, 1, 2, 3, 4, 5, 189, 7, 128]);
+
+          final decoder = PcmDecoder(
+            track: a,
+            sampleRate: 44100,
+            nbChannel: 3,
+            encoding: PCMDecoderEncoding.signed8bits,
+          );
+
+          final channels = decoder.decode();
+
+          expect(channels.length, 3);
+          expect(channels[0], [0.toSigned(8), 3.toSigned(8), 189.toSigned(8)]);
+          expect(channels[1], [1.toSigned(8), 4.toSigned(8), 7.toSigned(8)]);
+          expect(channels[2], [2.toSigned(8), 5.toSigned(8), 128.toSigned(8)]);
+        },
+      );
+    },
+  );
 }
