@@ -8,15 +8,12 @@ class PcmDecoder {
   late Buffer buffer;
 
   final int nbChannel;
-  final Endian endian;
-  final bool signedData;
   final int sampleRate;
-  final int bitPerSample;
+  final PCMDecoderEncoding encoding;
 
   late final lengthFile = buffer.randomAccessFile.lengthSync();
-  late final bytesPerSamples = (bitPerSample ~/ 8);
-  late final nbSamples = lengthFile ~/ bytesPerSamples;
-  late final samplesPerChannel = nbSamples ~/ nbChannel;
+  late final int nbSamples;
+  late final int samplesPerChannel;
 
   late final channels = [
     for (int i = 0; i < nbChannel; i++) Int32List(samplesPerChannel)
@@ -24,13 +21,13 @@ class PcmDecoder {
 
   PcmDecoder({
     required File track,
-    required this.bitPerSample,
     required this.sampleRate,
     required this.nbChannel,
-    required this.endian,
-    required this.signedData,
+    required this.encoding,
   }) {
     buffer = Buffer(randomAccessFile: track.openSync());
+    nbSamples = lengthFile ~/ encoding.bitsPerSamples;
+    samplesPerChannel = nbSamples ~/ nbChannel;
   }
 
   void close() {
@@ -38,53 +35,65 @@ class PcmDecoder {
   }
 
   List<Samples> decode() {
-    print("Size : $lengthFile");
-    print("Nb channel : $nbChannel");
-    print("Bits per sample : $bitPerSample bits");
-    print("Bytes per sample : $bytesPerSamples bytes");
-    print("Samples per channel : $samplesPerChannel bytes");
+    final bytesToRead = encoding.bitsPerSamples;
+    final data = buffer.read(bytesToRead * nbChannel);
 
-    int sampleCounter = 0;
+    if (data.isEmpty) return channels;
 
-    while (sampleCounter < samplesPerChannel) {
-      final bytesToRead = bytesPerSamples;
-      final data = buffer.read(bytesToRead * nbChannel);
-
-      if (data.isEmpty) break;
-
-      if (signedData) {
-        if (bitPerSample == 8) {
-          for (int i = 0; i < data.length; i += bytesPerSamples) {
-            for (int channel = 0; channel < nbChannel; channel++) {
-              if (sampleCounter < samplesPerChannel) {
-                channels[channel][sampleCounter] =
-                    data[i + channel * bytesPerSamples];
-              }
-            }
-
-            if (sampleCounter < samplesPerChannel) {
-              sampleCounter++;
-            }
-          }
-        }
-      } else {
-        if (bitPerSample == 8) {
-          for (int i = 0; i < data.length; i += bytesPerSamples) {
-            for (int channel = 0; channel < nbChannel; channel++) {
-              if (sampleCounter < samplesPerChannel) {
-                channels[channel][sampleCounter] =
-                    data[i + channel * bytesPerSamples].toSigned(8);
-              }
-            }
-
-            if (sampleCounter < samplesPerChannel) {
-              sampleCounter++;
-            }
-          }
-        }
-      }
+    switch (encoding) {
+      case PCMDecoderEncoding.signed8bits:
+        _signed8Bits(data);
+        break;
+      case PCMDecoderEncoding.unsigned8bits:
+        _unsigned8Bits(data);
+        break;
     }
 
     return channels;
   }
+
+  void _unsigned8Bits(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 1;
+
+    for (int i = 0; i < data.length; i += bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          channels[channel][sampleCounter] =
+              data[i + channel * bytesPerSamples];
+        }
+      }
+
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+
+  void _signed8Bits(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 1;
+
+    for (int i = 0; i < data.length; i += bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          channels[channel][sampleCounter] =
+              data[i + channel * bytesPerSamples].toSigned(8);
+        }
+      }
+
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+}
+
+enum PCMDecoderEncoding {
+  signed8bits(8),
+  unsigned8bits(8);
+
+  final int bitsPerSamples;
+
+  const PCMDecoderEncoding(this.bitsPerSamples);
 }
