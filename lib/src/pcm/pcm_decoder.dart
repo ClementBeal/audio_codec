@@ -67,8 +67,7 @@ class PcmDecoder {
         // TODO: Handle this case.
         throw UnimplementedError();
       case PCMDecoderEncoding.signed24bitsBE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        _signed24BitsBE(data);
       case PCMDecoderEncoding.signed24bitsLE:
         // TODO: Handle this case.
         throw UnimplementedError();
@@ -236,6 +235,27 @@ class PcmDecoder {
               (data[i * nbChannel + channel * bytesPerSamples] << 8 |
                       data[i * nbChannel + channel * bytesPerSamples + 1])
                   .toSigned(16);
+        }
+      }
+
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+
+  void _signed24BitsBE(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 3;
+
+    for (int i = 0; i < data.length; i += bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          channels[channel][sampleCounter] =
+              (data[i * nbChannel + channel * bytesPerSamples] << 16 |
+                      data[i * nbChannel + channel * bytesPerSamples + 1] << 8 |
+                      data[i * nbChannel + channel * bytesPerSamples + 2])
+                  .toSigned(24);
         }
       }
 
