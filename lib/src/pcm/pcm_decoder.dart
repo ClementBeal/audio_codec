@@ -59,8 +59,7 @@ class PcmDecoder {
         // TODO: Handle this case.
         throw UnimplementedError();
       case PCMDecoderEncoding.unsigned32bitsBE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        _unsigned32BitsBE(data);
       case PCMDecoderEncoding.unsigned32bitsLE:
         // TODO: Handle this case.
         throw UnimplementedError();
@@ -125,6 +124,26 @@ class PcmDecoder {
           int sample = (data[i + channel * bytesPerSamples] << 16) |
               data[i + channel * bytesPerSamples + 1] << 8 |
               data[i + channel * bytesPerSamples + 2];
+          channels[channel][sampleCounter] = sample;
+        }
+      }
+      if (sampleCounter < samplesPerChannel) {
+        sampleCounter++;
+      }
+    }
+  }
+
+  void _unsigned32BitsBE(Uint8List data) {
+    int sampleCounter = 0;
+    int bytesPerSamples = 4;
+
+    for (int i = 0; i < data.length; i += nbChannel * bytesPerSamples) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        if (sampleCounter < samplesPerChannel) {
+          int sample = (data[i + channel * bytesPerSamples] << 24) |
+              data[i + channel * bytesPerSamples + 1] << 16 |
+              data[i + channel * bytesPerSamples + 2] << 8 |
+              data[i + channel * bytesPerSamples + 3];
           channels[channel][sampleCounter] = sample;
         }
       }
