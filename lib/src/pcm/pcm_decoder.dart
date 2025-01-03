@@ -8,7 +8,7 @@ class PcmDecoder {
 
   final int nbChannel;
   final int sampleRate;
-  final PCMDecoderEncoding encoding;
+  final PCMEncoding encoding;
 
   late final lengthFile = buffer.lengthSync();
   late final int nbSamples;
@@ -41,35 +41,35 @@ class PcmDecoder {
     if (data.isEmpty) return channels;
 
     switch (encoding) {
-      case PCMDecoderEncoding.signed8bits:
+      case PCMEncoding.signed8bits:
         _signed8Bits(data);
         break;
-      case PCMDecoderEncoding.unsigned8bits:
+      case PCMEncoding.unsigned8bits:
         _unsigned8Bits(data);
         break;
-      case PCMDecoderEncoding.unsigned16bitsBE:
+      case PCMEncoding.unsigned16bitsBE:
         _unsigned16BitsBE(data);
-      case PCMDecoderEncoding.unsigned16bitsLE:
+      case PCMEncoding.unsigned16bitsLE:
         _unsigned16BitsLE(data);
-      case PCMDecoderEncoding.unsigned24bitsBE:
+      case PCMEncoding.unsigned24bitsBE:
         _unsigned24BitsBE(data);
-      case PCMDecoderEncoding.unsigned24bitsLE:
+      case PCMEncoding.unsigned24bitsLE:
         _unsigned24BitsLE(data);
-      case PCMDecoderEncoding.unsigned32bitsBE:
+      case PCMEncoding.unsigned32bitsBE:
         _unsigned32BitsBE(data);
-      case PCMDecoderEncoding.unsigned32bitsLE:
+      case PCMEncoding.unsigned32bitsLE:
         _unsigned32BitsLE(data);
-      case PCMDecoderEncoding.signed16bitsBE:
+      case PCMEncoding.signed16bitsBE:
         _signed16BitsBE(data);
-      case PCMDecoderEncoding.signed16bitsLE:
+      case PCMEncoding.signed16bitsLE:
         _signed16BitsLE(data);
-      case PCMDecoderEncoding.signed24bitsBE:
+      case PCMEncoding.signed24bitsBE:
         _signed24BitsBE(data);
-      case PCMDecoderEncoding.signed24bitsLE:
+      case PCMEncoding.signed24bitsLE:
         _signed24BitsLE(data);
-      case PCMDecoderEncoding.signed32bitsBE:
+      case PCMEncoding.signed32bitsBE:
         _signed32BitsBE(data);
-      case PCMDecoderEncoding.signed32bitsLE:
+      case PCMEncoding.signed32bitsLE:
         _signed32BitsLE(data);
     }
 
@@ -340,7 +340,7 @@ class PcmDecoder {
   }
 }
 
-enum PCMDecoderEncoding {
+enum PCMEncoding {
   // signed
   signed8bits(1),
   signed16bitsBE(2),
@@ -360,24 +360,24 @@ enum PCMDecoderEncoding {
 
   final int bytesPerSamples;
 
-  const PCMDecoderEncoding(this.bytesPerSamples);
+  const PCMEncoding(this.bytesPerSamples);
 
-  static PCMDecoderEncoding? fromString(String possibleEncoding) {
+  static PCMEncoding? fromString(String possibleEncoding) {
     return switch (possibleEncoding) {
-      "u8" => PCMDecoderEncoding.unsigned8bits,
-      "s8" => PCMDecoderEncoding.unsigned8bits,
-      "u16be" => PCMDecoderEncoding.unsigned16bitsBE,
-      "u16le" => PCMDecoderEncoding.unsigned16bitsLE,
-      "s16be" => PCMDecoderEncoding.signed16bitsBE,
-      "s16le" => PCMDecoderEncoding.signed16bitsLE,
-      "u24be" => PCMDecoderEncoding.unsigned24bitsBE,
-      "u24le" => PCMDecoderEncoding.unsigned24bitsLE,
-      "s24be" => PCMDecoderEncoding.signed24bitsBE,
-      "s24le" => PCMDecoderEncoding.signed24bitsLE,
-      "u32be" => PCMDecoderEncoding.unsigned32bitsBE,
-      "u32le" => PCMDecoderEncoding.unsigned32bitsLE,
-      "s32be" => PCMDecoderEncoding.signed32bitsBE,
-      "s32le" => PCMDecoderEncoding.signed32bitsLE,
+      "u8" => PCMEncoding.unsigned8bits,
+      "s8" => PCMEncoding.unsigned8bits,
+      "u16be" => PCMEncoding.unsigned16bitsBE,
+      "u16le" => PCMEncoding.unsigned16bitsLE,
+      "s16be" => PCMEncoding.signed16bitsBE,
+      "s16le" => PCMEncoding.signed16bitsLE,
+      "u24be" => PCMEncoding.unsigned24bitsBE,
+      "u24le" => PCMEncoding.unsigned24bitsLE,
+      "s24be" => PCMEncoding.signed24bitsBE,
+      "s24le" => PCMEncoding.signed24bitsLE,
+      "u32be" => PCMEncoding.unsigned32bitsBE,
+      "u32le" => PCMEncoding.unsigned32bitsLE,
+      "s32be" => PCMEncoding.signed32bitsBE,
+      "s32le" => PCMEncoding.signed32bitsLE,
       _ => null
     };
   }
