@@ -26,7 +26,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned8bits,
+            encoding: PCMEncoding.unsigned8bits,
           );
 
           final channels = decoder.decode();
@@ -46,7 +46,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned8bits,
+            encoding: PCMEncoding.unsigned8bits,
           );
 
           final channels = decoder.decode();
@@ -66,7 +66,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned8bits,
+            encoding: PCMEncoding.unsigned8bits,
           );
 
           final channels = decoder.decode();
@@ -99,7 +99,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned16bitsBE,
+            encoding: PCMEncoding.unsigned16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -119,7 +119,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned16bitsBE,
+            encoding: PCMEncoding.unsigned16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -140,7 +140,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned16bitsBE,
+            encoding: PCMEncoding.unsigned16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -161,7 +161,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned16bitsBE,
+            encoding: PCMEncoding.unsigned16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -194,7 +194,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned24bitsBE,
+            encoding: PCMEncoding.unsigned24bitsBE,
           );
 
           final channels = decoder.decode();
@@ -214,7 +214,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned24bitsBE,
+            encoding: PCMEncoding.unsigned24bitsBE,
           );
 
           final channels = decoder.decode();
@@ -236,7 +236,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned24bitsBE,
+            encoding: PCMEncoding.unsigned24bitsBE,
           );
 
           final channels = decoder.decode();
@@ -269,7 +269,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned32bitsBE,
+            encoding: PCMEncoding.unsigned32bitsBE,
           );
 
           final channels = decoder.decode();
@@ -289,7 +289,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned32bitsBE,
+            encoding: PCMEncoding.unsigned32bitsBE,
           );
 
           final channels = decoder.decode();
@@ -314,7 +314,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned32bitsBE,
+            encoding: PCMEncoding.unsigned32bitsBE,
           );
 
           final channels = decoder.decode();
@@ -351,7 +351,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned16bitsLE,
+            encoding: PCMEncoding.unsigned16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -371,7 +371,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned16bitsLE,
+            encoding: PCMEncoding.unsigned16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -392,7 +392,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned16bitsLE,
+            encoding: PCMEncoding.unsigned16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -413,7 +413,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned16bitsLE,
+            encoding: PCMEncoding.unsigned16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -446,7 +446,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned24bitsLE,
+            encoding: PCMEncoding.unsigned24bitsLE,
           );
 
           final channels = decoder.decode();
@@ -466,7 +466,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned24bitsLE,
+            encoding: PCMEncoding.unsigned24bitsLE,
           );
 
           final channels = decoder.decode();
@@ -488,7 +488,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned24bitsLE,
+            encoding: PCMEncoding.unsigned24bitsLE,
           );
 
           final channels = decoder.decode();
@@ -521,7 +521,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.unsigned32bitsLE,
+            encoding: PCMEncoding.unsigned32bitsLE,
           );
 
           final channels = decoder.decode();
@@ -541,7 +541,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.unsigned32bitsLE,
+            encoding: PCMEncoding.unsigned32bitsLE,
           );
 
           final channels = decoder.decode();
@@ -566,7 +566,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.unsigned32bitsLE,
+            encoding: PCMEncoding.unsigned32bitsLE,
           );
 
           final channels = decoder.decode();
@@ -603,7 +603,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed8bits,
+            encoding: PCMEncoding.signed8bits,
           );
 
           final channels = decoder.decode();
@@ -628,7 +628,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed8bits,
+            encoding: PCMEncoding.signed8bits,
           );
 
           final channels = decoder.decode();
@@ -648,7 +648,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed8bits,
+            encoding: PCMEncoding.signed8bits,
           );
 
           final channels = decoder.decode();
@@ -681,7 +681,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed16bitsBE,
+            encoding: PCMEncoding.signed16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -701,7 +701,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed16bitsBE,
+            encoding: PCMEncoding.signed16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -722,7 +722,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed16bitsBE,
+            encoding: PCMEncoding.signed16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -743,7 +743,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed16bitsBE,
+            encoding: PCMEncoding.signed16bitsBE,
           );
 
           final channels = decoder.decode();
@@ -776,7 +776,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed24bitsBE,
+            encoding: PCMEncoding.signed24bitsBE,
           );
 
           final channels = decoder.decode();
@@ -796,7 +796,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed24bitsBE,
+            encoding: PCMEncoding.signed24bitsBE,
           );
 
           final channels = decoder.decode();
@@ -818,7 +818,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed24bitsBE,
+            encoding: PCMEncoding.signed24bitsBE,
           );
 
           final channels = decoder.decode();
@@ -851,7 +851,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed32bitsBE,
+            encoding: PCMEncoding.signed32bitsBE,
           );
 
           final channels = decoder.decode();
@@ -871,7 +871,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed32bitsBE,
+            encoding: PCMEncoding.signed32bitsBE,
           );
 
           final channels = decoder.decode();
@@ -896,7 +896,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed32bitsBE,
+            encoding: PCMEncoding.signed32bitsBE,
           );
 
           final channels = decoder.decode();
@@ -933,7 +933,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed16bitsLE,
+            encoding: PCMEncoding.signed16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -953,7 +953,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed16bitsLE,
+            encoding: PCMEncoding.signed16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -974,7 +974,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed16bitsLE,
+            encoding: PCMEncoding.signed16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -995,7 +995,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed16bitsLE,
+            encoding: PCMEncoding.signed16bitsLE,
           );
 
           final channels = decoder.decode();
@@ -1028,7 +1028,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed24bitsLE,
+            encoding: PCMEncoding.signed24bitsLE,
           );
 
           final channels = decoder.decode();
@@ -1048,7 +1048,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed24bitsLE,
+            encoding: PCMEncoding.signed24bitsLE,
           );
 
           final channels = decoder.decode();
@@ -1070,7 +1070,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed24bitsLE,
+            encoding: PCMEncoding.signed24bitsLE,
           );
 
           final channels = decoder.decode();
@@ -1103,7 +1103,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 1,
-            encoding: PCMDecoderEncoding.signed32bitsLE,
+            encoding: PCMEncoding.signed32bitsLE,
           );
 
           final channels = decoder.decode();
@@ -1123,7 +1123,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 2,
-            encoding: PCMDecoderEncoding.signed32bitsLE,
+            encoding: PCMEncoding.signed32bitsLE,
           );
 
           final channels = decoder.decode();
@@ -1148,7 +1148,7 @@ void main() {
             track: a,
             sampleRate: 44100,
             nbChannel: 3,
-            encoding: PCMDecoderEncoding.signed32bitsLE,
+            encoding: PCMEncoding.signed32bitsLE,
           );
 
           final channels = decoder.decode();

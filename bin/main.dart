@@ -21,7 +21,7 @@ void main(List<String> args) {
 
     decoder.close();
   } else if (inputPath.endsWith("pcm")) {
-    final encoding = PCMDecoderEncoding.fromString(args[1]);
+    final encoding = PCMEncoding.fromString(args[1]);
 
     if (encoding == null) {
       throw Exception("The PCM decoder are wrong : ${args[1]}");
