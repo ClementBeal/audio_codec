@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -6,7 +5,6 @@ class WavEncoder {
   final int sampleRate;
   final int numChannels;
   final int bitDepth;
-  final int _bytesPerSample;
   final int _blockAlign;
   final int _byteRate;
 
@@ -15,8 +13,7 @@ class WavEncoder {
     required this.sampleRate,
     required this.numChannels,
     required this.bitDepth,
-  })  : _bytesPerSample = bitDepth ~/ 8,
-        _blockAlign = (bitDepth ~/ 8) * numChannels,
+  })  : _blockAlign = (bitDepth ~/ 8) * numChannels,
         _byteRate = sampleRate * numChannels * (bitDepth ~/ 8) {
     if (bitDepth % 8 != 0) {
       throw ArgumentError('Bit depth must be a multiple of 8');
@@ -30,9 +27,11 @@ class WavEncoder {
   static const _fmtChunkSize = 16;
   static const _pcmAudioFormat = 1;
 
-  void encode(File file, List<int> samples) {
+  /// Encode into the [file] the samples as a WAV file
+  /// The samples must have been encoded into Little-Endian
+  void encode(File file, Uint8List samples) {
     final writer = file.openSync(mode: FileMode.writeOnly);
-    final dataSize = samples.length * _bytesPerSample;
+    final dataSize = samples.length;
     final fileSize = 44 + dataSize; // Total size = header (44 bytes) + data
 
     // Write all headers in one go
@@ -84,31 +83,8 @@ class WavEncoder {
     writer.writeFromSync(headerBuffer);
   }
 
-  void _writeOptimizedData(RandomAccessFile writer, List<int> samples) {
-    if (_bytesPerSample == 1) {
-      writer.writeFromSync(Uint8ClampedList.fromList(samples));
-      return;
-    }
-
-    // For other bit depths, use a pre-allocated buffer
-    final bufferSize = samples.length * _bytesPerSample;
-    final buffer = Uint8List(bufferSize);
-    final minVal = -(1 << (bitDepth - 1));
-    final maxVal = (1 << (bitDepth - 1)) - 1;
-
-    var bufferIndex = 0;
-    for (final sample in samples) {
-      // Inline sample clipping
-      final clippedSample =
-          sample < minVal ? minVal : (sample > maxVal ? maxVal : sample);
-
-      // Unroll the byte writing loop
-      for (var i = 0; i < _bytesPerSample; i++) {
-        buffer[bufferIndex++] = (clippedSample >> (i * 8)) & 0xFF;
-      }
-    }
-
-    writer.writeFromSync(buffer);
+  void _writeOptimizedData(RandomAccessFile writer, Uint8List samples) {
+    writer.writeFromSync(samples);
   }
 
   Uint8List _intToLittleEndian(int value, int length) {
