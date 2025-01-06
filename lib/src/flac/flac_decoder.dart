@@ -60,6 +60,33 @@ class FlacDecoder {
     return result;
   }
 
+  List<Samples> decodeAll() {
+    final channels = List.generate(
+      result.streamInfoBlock!.channels,
+      (index) => Int32List(result.streamInfoBlock!.totalSamples),
+      growable: false,
+    );
+
+    int sampleIndex = 0; // Use sampleIndex to track the total samples written
+
+    while (hasNextFrame()) {
+      final frame = readFrame();
+
+      for (var i = 0; i < frame.subframes.length; i++) {
+        final subframe = frame.subframes[i];
+
+        // for (var j = 0; j < subframe.length; j++) {
+        channels[i]
+            .setRange(sampleIndex, sampleIndex + frame.blockSize, subframe);
+        // }
+      }
+
+      sampleIndex += frame.blockSize;
+    }
+
+    return channels;
+  }
+
   /// Close the [reader] when the decoding is done
   void close() {
     reader.closeSync();
