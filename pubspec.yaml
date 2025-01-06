@@ -1,6 +1,6 @@
 name: audio_codec
 description: A library to decode and perhaps encode audios
-version: 0.0.1
+version: 0.0.2
 homepage: https://clementbeal.github.io/
 repository: https://github.com/ClementBeal/audio_codec
 issue_tracker: https://github.com/ClementBeal/audio_codec/issues

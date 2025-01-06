@@ -12,7 +12,7 @@ A Dart library for decoding (and potentially encoding) audio files. This package
 | MP3   | -               | -               | Not yet implemented.                                        |
 | OPUS  | -               | -               | Not yet implemented.                                        |
 | WAV   | -               | Good            | Writing is supported.                                       |
-| PCM   | Excellent       | -               |                                                             |
+| PCM   | Excellent       | Excellent       |                                                             |
 
 ## Status Levels
 
