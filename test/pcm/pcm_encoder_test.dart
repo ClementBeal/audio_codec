@@ -207,8 +207,6 @@ void main() {
 
   // Unsigned Little-Endian
 
-  // Unsigned Little-Endian
-
   group("unsigned 16 bits Little-Endian", () {
     test("1 channel", () {
       final encoder = PcmEncoder(channels: [
@@ -327,6 +325,285 @@ void main() {
         0x04, 0x03, 0x02, 0x01, //
         0x08, 0x07, 0x06, 0x05, //
         0x0C, 0x0B, 0x0A, 0x09, //
+      ]);
+    });
+  });
+
+  // Signed Big-Endian
+
+  group("signed 16 bits Big-Endian", () {
+    test("1 channel", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x0102, 0x0102, 0x0304, 0xE304])
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed16bitsBE);
+
+      expect(result, hasLength(8));
+      expect(result, [0x01, 0x02, 0x01, 0x02, 0x03, 0x04, 0xE3, 0x04]);
+    });
+
+    test("2 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x0102, 0x0102]),
+        Int32List.fromList([0x0304, 0x0304]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed16bitsBE);
+
+      expect(result, hasLength(8));
+      expect(result, [0x01, 0x02, 0x03, 0x04, 0x01, 0x02, 0x03, 0x04]);
+    });
+
+    test("3 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x0102, 0x0102]),
+        Int32List.fromList([0x0304, 0x0304]),
+        Int32List.fromList([0x0506, 0x0506]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed16bitsBE);
+
+      expect(result, hasLength(12));
+      expect(result, [
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, //
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, //
+      ]);
+    });
+  });
+
+  group("signed 24 bits Big-Endian", () {
+    test("1 channel", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x010203, -0x040506, 0x070809, -0x0A0B0C])
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed24bitsBE);
+
+      expect(result, hasLength(12));
+      expect(result, [
+        0x01, 0x02, 0x03, 0xFB, 0xFA, 0xFA, 0x07, 0x08, //
+        0x09, 0xF5, 0xF4, 0xF4,
+      ]);
+    });
+
+    test("2 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x010203, -0x040506]),
+        Int32List.fromList([0x070809, -0x0A0B0C]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed24bitsBE);
+
+      expect(result, hasLength(12));
+      expect(result, [
+        0x01, 0x02, 0x03, 0x07, 0x08, 0x09, 0xFB, 0xFA, //
+        0xFA, 0xF5, 0xF4, 0xF4,
+      ]);
+    });
+
+    test("3 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x010203, -0x040506]),
+        Int32List.fromList([0x070809, -0x0A0B0C]),
+        Int32List.fromList([0x0D0E0F, -0x101112]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed24bitsBE);
+
+      expect(result, hasLength(18));
+      expect(result, [
+        0x01, 0x02, 0x03, 0x07, 0x08, 0x09, 0x0D, 0x0E, //
+        0x0F, 0xFB, 0xFA, 0xFA, 0xF5, 0xF4, 0xF4, 0xEF, //
+        0xEE, 0xEE,
+      ]);
+    });
+  });
+
+  group("signed 32 bits Big-Endian", () {
+    test("1 channel", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x01020304, -0x05060708, 0x090A0B0C, -0x0D0E0F10])
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed32bitsBE);
+
+      expect(result, hasLength(16));
+      expect(result, [
+        0x01, 0x02, 0x03, 0x04, 0xFA, 0xF9, 0xF8, 0xF8, //
+        0x09, 0x0A, 0x0B, 0x0C, 0xF2, 0xF1, 0xF0, 0xF0, //
+      ]);
+    });
+
+    test("2 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x01020304, -0x05060708]),
+        Int32List.fromList([0x090A0B0C, -0x0D0E0F10]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed32bitsBE);
+
+      expect(result, hasLength(16));
+      expect(result, [
+        0x01, 0x02, 0x03, 0x04, 0x09, 0x0A, 0x0B, 0x0C, //
+        0xFA, 0xF9, 0xF8, 0xF8, 0xF2, 0xF1, 0xF0, 0xF0, //
+      ]);
+    });
+
+    test("3 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x01020304, -0x05060708]),
+        Int32List.fromList([0x090A0B0C, -0x0D0E0F10]),
+        Int32List.fromList([0x11121314, -0x15161718]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed32bitsBE);
+
+      expect(result, hasLength(24));
+      expect(result, [
+        0x01, 0x02, 0x03, 0x04, 0x09, 0x0A, 0x0B, 0x0C, //
+        0x11, 0x12, 0x13, 0x14, 0xFA, 0xF9, 0xF8, 0xF8, //
+        0xF2, 0xF1, 0xF0, 0xF0, 0xEA, 0xE9, 0xE8, 0xE8, //
+      ]);
+    });
+  });
+
+  // Signed Little-Endian
+
+  group("signed 16 bits Little-Endian", () {
+    test("1 channel", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x0102, -0x0304, 0x0506, -0x0708])
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed16bitsLE);
+
+      expect(result, hasLength(8));
+      expect(result, [0x02, 0x01, 0xFC, 0xFC, 0x06, 0x05, 0xF8, 0xF8]);
+    });
+
+    test("2 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x0102, -0x0304]),
+        Int32List.fromList([0x0506, -0x0708]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed16bitsLE);
+
+      expect(result, hasLength(8));
+      expect(result, [0x02, 0x01, 0x06, 0x05, 0xFC, 0xFC, 0xF8, 0xF8]);
+    });
+
+    test("3 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x0102, -0x0304]),
+        Int32List.fromList([0x0506, -0x0708]),
+        Int32List.fromList([0x090A, -0x0B0C]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed16bitsLE);
+
+      expect(result, hasLength(12));
+      expect(result, [
+        0x02, 0x01, 0x06, 0x05, //
+        0x0A, 0x09, 0xFC, 0xFC, //
+        0xF8, 0xF8, 0xF4, 0xF4, //
+      ]);
+    });
+  });
+
+  group("signed 24 bits Little-Endian", () {
+    test("1 channel", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x010203, -0x040506, 0x070809, -0x0A0B0C])
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed24bitsLE);
+
+      expect(result, hasLength(12));
+      expect(result, [
+        0x03, 0x02, 0x01, 0xFA, 0xFA, 0xFB, 0x09, 0x08, //
+        0x07, 0xF4, 0xF4, 0xF5,
+      ]);
+    });
+
+    test("2 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x010203, -0x040506]),
+        Int32List.fromList([0x070809, -0x0A0B0C]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed24bitsLE);
+
+      expect(result, hasLength(12));
+      expect(result, [
+        0x03, 0x02, 0x01, 0x09, 0x08, 0x07, 0xFA, 0xFA, //
+        0xFB, 0xF4, 0xF4, 0xF5,
+      ]);
+    });
+
+    test("3 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x010203, -0x040506]),
+        Int32List.fromList([0x070809, -0x0A0B0C]),
+        Int32List.fromList([0x0D0E0F, -0x101112]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed24bitsLE);
+
+      expect(result, hasLength(18));
+      expect(result, [
+        0x03, 0x02, 0x01, 0x09, 0x08, 0x07, 0x0F, 0x0E, //
+        0x0D, 0xFA, 0xFA, 0xFB, 0xF4, 0xF4, 0xF5, 0xEE, //
+        0xEE, 0xEF,
+      ]);
+    });
+  });
+
+  group("signed 32 bits Little-Endian", () {
+    test("1 channel", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x01020304, -0x05060708, 0x090A0B0C, -0x0D0E0F10])
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed32bitsLE);
+
+      expect(result, hasLength(16));
+      expect(result, [
+        0x04, 0x03, 0x02, 0x01, 0xF8, 0xF8, 0xF9, 0xFA, //
+        0x0C, 0x0B, 0x0A, 0x09, 0xF0, 0xF0, 0xF1, 0xF2, //
+      ]);
+    });
+
+    test("2 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x01020304, -0x05060708]),
+        Int32List.fromList([0x090A0B0C, -0x0D0E0F10]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed32bitsLE);
+
+      expect(result, hasLength(16));
+      expect(result, [
+        0x04, 0x03, 0x02, 0x01, 0x0C, 0x0B, 0x0A, 0x09, //
+        0xF8, 0xF8, 0xF9, 0xFA, 0xF0, 0xF0, 0xF1, 0xF2, //
+      ]);
+    });
+
+    test("3 channels", () {
+      final encoder = PcmEncoder(channels: [
+        Int32List.fromList([0x01020304, -0x05060708]),
+        Int32List.fromList([0x090A0B0C, -0x0D0E0F10]),
+        Int32List.fromList([0x11121314, -0x15161718]),
+      ]);
+
+      final result = encoder.encode(PCMEncoding.signed32bitsLE);
+
+      expect(result, hasLength(24));
+      expect(result, [
+        0x04, 0x03, 0x02, 0x01, 0x0C, 0x0B, 0x0A, 0x09, //
+        0x14, 0x13, 0x12, 0x11, 0xF8, 0xF8, 0xF9, 0xFA, //
+        0xF0, 0xF0, 0xF1, 0xF2, 0xE8, 0xE8, 0xE9, 0xEA, //
       ]);
     });
   });

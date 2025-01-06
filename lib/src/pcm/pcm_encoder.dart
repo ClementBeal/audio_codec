@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audio_codec/src/flac/flac_decoder.dart';
@@ -20,20 +19,15 @@ class PcmEncoder {
       case PCMEncoding.signed16bitsBE:
         return _signed16BitsBE(channels);
       case PCMEncoding.signed16bitsLE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        return _signed16BitsLE(channels);
       case PCMEncoding.signed24bitsBE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        return _signed24BitsBE(channels);
       case PCMEncoding.signed24bitsLE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        return _signed24BitsLE(channels);
       case PCMEncoding.signed32bitsBE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        return _signed32BitsBE(channels);
       case PCMEncoding.signed32bitsLE:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+        return _signed32BitsLE(channels);
       case PCMEncoding.unsigned8bits:
         return _unsigned8Bits(channels);
       case PCMEncoding.unsigned16bitsBE:
@@ -59,7 +53,9 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setInt8(
-            channel + i * nbChannel * bytesPerSamples, data[channel][i]);
+          channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+        );
       }
     }
 
@@ -74,7 +70,9 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setUint8(
-            channel + i * nbChannel * bytesPerSamples, data[channel][i]);
+          channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+        );
       }
     }
 
@@ -89,7 +87,10 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setInt16(
-            channel + i * nbChannel * bytesPerSamples, data[channel][i]);
+          bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+          Endian.big,
+        );
       }
     }
 
@@ -104,8 +105,10 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setUint16(
-            bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
-            data[channel][i]);
+          bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+          Endian.big,
+        );
       }
     }
 
@@ -122,6 +125,7 @@ class PcmEncoder {
         int sample = data[channel][i];
         int offset =
             bytesPerSamples * channel + i * nbChannel * bytesPerSamples;
+
         buffer.setUint8(offset, (sample >> 16) & 0xFF);
         buffer.setUint8(offset + 1, (sample >> 8) & 0xFF);
         buffer.setUint8(offset + 2, sample & 0xFF);
@@ -139,8 +143,10 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setUint32(
-            bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
-            data[channel][i]);
+          bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+          Endian.big,
+        );
       }
     }
 
@@ -155,9 +161,10 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setUint16(
-            bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
-            data[channel][i],
-            Endian.little); // Note the Endian.little parameter
+          bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+          Endian.little,
+        );
       }
     }
 
@@ -174,7 +181,7 @@ class PcmEncoder {
         int sample = data[channel][i];
         int offset =
             bytesPerSamples * channel + i * nbChannel * bytesPerSamples;
-        // Set bytes in little-endian order (LSB first)
+
         buffer.setUint8(offset, sample & 0xFF);
         buffer.setUint8(offset + 1, (sample >> 8) & 0xFF);
         buffer.setUint8(offset + 2, (sample >> 16) & 0xFF);
@@ -192,9 +199,109 @@ class PcmEncoder {
     for (var i = 0; i < samplesPerChannel; i++) {
       for (int channel = 0; channel < nbChannel; channel++) {
         buffer.setUint32(
-            bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
-            data[channel][i],
-            Endian.little); // Note the Endian.little parameter
+          bytesPerSamples * channel + i * nbChannel * bytesPerSamples,
+          data[channel][i],
+          Endian.little,
+        );
+      }
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
+  Uint8List _signed16BitsLE(List<Samples> data) {
+    int bytesPerSamples = 2;
+
+    final buffer = ByteData(samplesPerChannel * nbChannel * bytesPerSamples);
+
+    for (var i = 0; i < samplesPerChannel; i++) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        buffer.setInt16(
+          (i * nbChannel + channel) * bytesPerSamples,
+          data[channel][i],
+          Endian.little,
+        );
+      }
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
+  Uint8List _signed24BitsBE(List<Samples> data) {
+    int bytesPerSamples = 3;
+
+    final buffer = ByteData(samplesPerChannel * nbChannel * bytesPerSamples);
+
+    for (var i = 0; i < samplesPerChannel; i++) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        int sample = data[channel][i];
+        if (sample > 0x7FFFFF) {
+          sample -= 0x1000000;
+        }
+        int offset = (i * nbChannel + channel) * bytesPerSamples;
+
+        buffer.setUint8(offset, (sample >> 16) & 0xFF);
+        buffer.setUint8(offset + 1, (sample >> 8) & 0xFF);
+        buffer.setUint8(offset + 2, sample & 0xFF);
+      }
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
+  Uint8List _signed24BitsLE(List<Samples> data) {
+    int bytesPerSamples = 3;
+
+    final buffer = ByteData(samplesPerChannel * nbChannel * bytesPerSamples);
+
+    for (var i = 0; i < samplesPerChannel; i++) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        int sample = data[channel][i];
+
+        if (sample > 0x7FFFFF) {
+          sample -= 0x1000000;
+        }
+        int offset = (i * nbChannel + channel) * bytesPerSamples;
+
+        buffer.setUint8(offset, sample & 0xFF);
+        buffer.setUint8(offset + 1, (sample >> 8) & 0xFF);
+        buffer.setUint8(offset + 2, (sample >> 16) & 0xFF);
+      }
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
+  Uint8List _signed32BitsBE(List<Samples> data) {
+    int bytesPerSamples = 4;
+
+    final buffer = ByteData(samplesPerChannel * nbChannel * bytesPerSamples);
+
+    for (var i = 0; i < samplesPerChannel; i++) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        buffer.setInt32(
+          (i * nbChannel + channel) * bytesPerSamples,
+          data[channel][i],
+          Endian.big,
+        );
+      }
+    }
+
+    return buffer.buffer.asUint8List();
+  }
+
+  Uint8List _signed32BitsLE(List<Samples> data) {
+    int bytesPerSamples = 4;
+
+    final buffer = ByteData(samplesPerChannel * nbChannel * bytesPerSamples);
+
+    for (var i = 0; i < samplesPerChannel; i++) {
+      for (int channel = 0; channel < nbChannel; channel++) {
+        buffer.setInt32(
+          (i * nbChannel + channel) * bytesPerSamples,
+          data[channel][i],
+          Endian.little,
+        );
       }
     }
 
