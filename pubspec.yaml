@@ -1,6 +1,6 @@
 name: audio_codec
 description: A Dart package for decoding and encoding audio files.
-version: 0.0.2
+version: 0.1.0
 homepage: https://clementbeal.github.io/
 repository: https://github.com/ClementBeal/audio_codec
 issue_tracker: https://github.com/ClementBeal/audio_codec/issues
