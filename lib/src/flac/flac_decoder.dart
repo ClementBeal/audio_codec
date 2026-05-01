@@ -396,7 +396,8 @@ class FlacDecoder {
 
     _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits, order, samples);
 
-    _decodeRiceCode(bitReader, blockSize, order, (residualIndex, residualValue) {
+    _decodeRiceCode(bitReader, blockSize, order,
+        (residualIndex, residualValue) {
       final i = order + residualIndex;
 
       switch (order) {
@@ -410,8 +411,10 @@ class FlacDecoder {
           samples[i] = 2 * samples[i - 1] - samples[i - 2] + residualValue;
           break;
         case 3:
-          samples[i] =
-              3 * samples[i - 1] - 3 * samples[i - 2] + samples[i - 3] + residualValue;
+          samples[i] = 3 * samples[i - 1] -
+              3 * samples[i - 2] +
+              samples[i - 3] +
+              residualValue;
           break;
         case 4:
           samples[i] = 4 * samples[i - 1] -
@@ -503,7 +506,8 @@ class FlacDecoder {
       for (int i = 0; i < totalElementsInPartition; i++) {
         if (hasEscaped) {
           final bitWidth = escapedResidualBitWidth!;
-          final residualValue = bitWidth == 0 ? 0 : bitReader.readSigned(bitWidth);
+          final residualValue =
+              bitWidth == 0 ? 0 : bitReader.readSigned(bitWidth);
           onResidual(residualId++, residualValue);
         } else {
           final quotient = bitReader.readUnaryZeroCount();
