@@ -11,6 +11,9 @@ import 'package:audio_codec/src/utils/number.dart';
 
 typedef Samples = Int32List;
 
+const int _metadataBlockTypeStreamInfo = 0;
+const int _metadataBlockTypeSeekTable = 3;
+
 /// Contains all the metadata information that can be useful
 class FlacResult {
   StreamInfo? streamInfoBlock;
@@ -48,9 +51,9 @@ class FlacDecoder {
     do {
       currentBlock = _readBlock();
 
-      if (currentBlock.blockType == 0) {
+      if (currentBlock.blockType == _metadataBlockTypeStreamInfo) {
         result.streamInfoBlock = _readStreamInfoBlock();
-      } else if (currentBlock.blockType == 3) {
+      } else if (currentBlock.blockType == _metadataBlockTypeSeekTable) {
         result.seekpoints = readSeektableBlock(currentBlock.length);
       } else {
         bufferedFile.skip(currentBlock.length);
