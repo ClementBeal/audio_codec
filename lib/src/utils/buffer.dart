@@ -57,7 +57,7 @@ class Buffer {
       final remaining = _bufferedBytes - _cursor;
 
       if (remaining > 0) {
-        result.setRange(0, remaining, _buffer, _cursor);
+        result.setAll(0, _buffer.sublist(_cursor, _cursor+ remaining));
       }
 
       randomAccessFile.readIntoSync(result, remaining);
