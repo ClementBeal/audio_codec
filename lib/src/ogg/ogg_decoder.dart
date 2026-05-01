@@ -19,7 +19,6 @@ class OggDecoder {
   late final RandomAccessFile source;
   late final Buffer bufferedSource;
   late final OggDemuxer demuxer;
-  Directory? _temporaryDecodeDirectory;
 
   final List<Uint8List> _pendingPackets = <Uint8List>[];
   final BytesBuilder _packetInProgress = BytesBuilder(copy: false);
@@ -176,28 +175,13 @@ class OggDecoder {
 
   void _prepareFlacDecoder(Uint8List nativeFlacStream) {
     _disposeFlacDecoderArtifacts();
-
-    _temporaryDecodeDirectory =
-        Directory.systemTemp.createTempSync('audio_codec_ogg_flac_');
-    final String flacFilePath =
-        '${_temporaryDecodeDirectory!.path}${Platform.pathSeparator}stream.flac';
-    final File flacFile = File(flacFilePath);
-
-    flacFile.writeAsBytesSync(nativeFlacStream, flush: true);
-    flacDecoder = FlacDecoder.fromFile(flacFile);
+    flacDecoder = FlacDecoder.fromBytes(nativeFlacStream);
   }
 
   void _disposeFlacDecoderArtifacts() {
     if (flacDecoder != null) {
       flacDecoder!.close();
       flacDecoder = null;
-    }
-
-    if (_temporaryDecodeDirectory != null) {
-      if (_temporaryDecodeDirectory!.existsSync()) {
-        _temporaryDecodeDirectory!.deleteSync(recursive: true);
-      }
-      _temporaryDecodeDirectory = null;
     }
   }
 

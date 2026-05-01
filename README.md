@@ -52,7 +52,7 @@ import 'package:audio_codec/src/wav/wav_encoder.dart';
 void main() {
   final flacFile = File('test.flac');
 
-  final decoder = FlacDecoder(track: flacFile);
+  final decoder = FlacDecoder.fromFile(flacFile);
   final result = decoder.decode();
 
   final pcmSamples = Int32List(
