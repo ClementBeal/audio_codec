@@ -230,7 +230,7 @@ class FlacDecoder {
         bytes.add(blockSize);
       } else {
         final blockSize = bufferedFile.read(2);
-        blockSizeInInterChannelSamples = blockSize[0] << 8 | blockSize[1] + 1;
+        blockSizeInInterChannelSamples = ((blockSize[0] << 8) | blockSize[1]) + 1;
         bytes.addAll(blockSize);
       }
     }
