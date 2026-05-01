@@ -506,12 +506,7 @@ class FlacDecoder {
           final residualValue = bitWidth == 0 ? 0 : bitReader.readSigned(bitWidth);
           onResidual(residualId++, residualValue);
         } else {
-          int quotient = 0;
-
-          // Decode the quotient (unary part)
-          while (bitReader.readBit() == 0) {
-            quotient++;
-          }
+          final quotient = bitReader.readUnaryZeroCount();
 
           int residualSampleValue;
           if (riceParameter == 0) {

@@ -195,6 +195,40 @@ class Buffer {
     return _readBits(bitCount).toSigned(bitCount);
   }
 
+  /// Reads a unary value used by Rice coding:
+  /// counts consecutive `0` bits until the first `1` bit (which is consumed).
+  int readUnaryZeroCount() {
+    int zeroCount = 0;
+
+    while (true) {
+      if (_cursor >= _bufferedBytes && !_fill()) {
+        throw StateError('Unexpected end of buffer while reading unary code');
+      }
+
+      final currentByte = _buffer[_cursor];
+      final availableBits = _bitCount + 1;
+      final mask = (1 << availableBits) - 1;
+      final remainingBits = currentByte & mask;
+
+      if (remainingBits == 0) {
+        zeroCount += availableBits;
+        _bitCount = -1;
+        _updateBitCursor();
+        continue;
+      }
+
+      // Highest set bit inside the remaining range gives the first `1` we will read.
+      final highestSetBit = remainingBits.bitLength - 1;
+      final zerosInThisByte = _bitCount - highestSetBit;
+      zeroCount += zerosInThisByte;
+
+      // Consume zeros + terminating `1`.
+      _bitCount -= (zerosInThisByte + 1);
+      _updateBitCursor();
+      return zeroCount;
+    }
+  }
+
   void align() {
     if (_bitCount < 7) {
       _bitCount = -1;
