@@ -34,7 +34,8 @@ class OggDemuxer {
     // F: checksum (little-endian uint32)
     // G: page segments count
     final fixedHeader = _readExact(23, label: 'OGG fixed header');
-    final headerType = fixedHeader[1];
+    final int headerType = fixedHeader[1];
+    _validateHeaderType(headerType);
 
     // The last fixed-header byte (G) tells how many lacing values follow.
     // This "segment table" has 1 byte per lacing value, each byte in [0..255].
@@ -85,6 +86,16 @@ class OggDemuxer {
     }
     return bytes;
   }
+
+  void _validateHeaderType(int rawHeaderType) {
+    const int validBitsMask = 0x07;
+    final int unknownBits = rawHeaderType & ~validBitsMask;
+    if (unknownBits != 0) {
+      throw FormatException(
+        'Invalid OGG header type flags: 0x${rawHeaderType.toRadixString(16)}',
+      );
+    }
+  }
 }
 
 class OggPage {
@@ -112,7 +123,13 @@ class OggPage {
     required this.headerBytes,
   });
 
+  /// True when the first packet in this page is a continuation
+  /// of a packet that started in the previous page.
   bool get isContinuation => (headerType & 0x01) != 0;
+
+  /// True when this page is marked as the beginning of the logical stream.
   bool get isBeginningOfStream => (headerType & 0x02) != 0;
+
+  /// True when this page is marked as the end of the logical stream.
   bool get isEndOfStream => (headerType & 0x04) != 0;
 }
