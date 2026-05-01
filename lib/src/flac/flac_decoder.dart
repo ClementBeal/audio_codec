@@ -233,7 +233,8 @@ class FlacDecoder {
         bytes.add(blockSize);
       } else {
         final blockSize = bufferedFile.read(2);
-        blockSizeInInterChannelSamples = ((blockSize[0] << 8) | blockSize[1]) + 1;
+        blockSizeInInterChannelSamples =
+            ((blockSize[0] << 8) | blockSize[1]) + 1;
         bytes.addAll(blockSize);
       }
     }
@@ -292,40 +293,26 @@ class FlacDecoder {
     );
   }
 
-  Future<void> _addToMd5(List<Samples> subframes, int bitDepth) async {
-    // 1. Pre-allocate a buffer for a frame's worth of data
+  void _addToMd5(List<Samples> subframes, int bitDepth) {
+    final bytesPerSample = (bitDepth + 7) >> 3;
     final frameSize =
-        subframes.first.length * subframes.length * (bitDepth ~/ 8);
+        subframes.first.length * subframes.length * bytesPerSample;
     final frameBuffer = Uint8List(frameSize);
-    final byteData = ByteData.view(frameBuffer.buffer);
 
     int offset = 0;
     for (var i = 0; i < subframes.first.length; i++) {
       for (var j = 0; j < subframes.length; j++) {
         final sample = subframes[j][i];
-
-        // 2. Optimized sample conversion based on bit depth
-        if (bitDepth == 16) {
-          byteData.setInt16(offset, sample, Endian.little);
-          offset += 2;
-        } else if (bitDepth == 24) {
-          // Assuming your toBytes() handles 24-bit by padding to 32-bit
-          byteData.setInt32(offset, sample, Endian.little);
-          offset += 3;
-        } else if (bitDepth == 8) {
-          byteData.setInt8(offset, sample);
-          offset += 1;
-        } else if (bitDepth == 32) {
-          byteData.setInt32(offset, sample, Endian.little);
-          offset += 4;
-        } else {
-          throw Exception("Unsupported bit depth: $bitDepth");
+        // The FLAC MD5 input is signed little-endian, byte-aligned.
+        // For non-byte-aligned depths (e.g. 12/20 bits), values are sign-extended
+        // to the next whole number of bytes before hashing.
+        for (var b = 0; b < bytesPerSample; b++) {
+          frameBuffer[offset++] = (sample >> (8 * b)) & 0xFF;
         }
       }
     }
 
-    // 3. Add the entire frame's data to the MD5 input in one go
-    md5Input.add(frameBuffer); // Update the digest directly
+    md5Input.add(frameBuffer);
   }
 
   /// Check that the decoded samples are correct. We compare the MD5 checksum from the
