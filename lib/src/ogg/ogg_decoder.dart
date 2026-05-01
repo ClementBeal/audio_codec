@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audio_codec/src/demuxer/ogg_demuxer.dart';
+import 'package:audio_codec/src/flac/flac_decoder.dart';
 import 'package:audio_codec/src/utils/buffer.dart';
 
 enum OggAudioCodec {
@@ -18,11 +19,13 @@ class OggDecoder {
   late final RandomAccessFile source;
   late final Buffer bufferedSource;
   late final OggDemuxer demuxer;
+  Directory? _temporaryDecodeDirectory;
 
   final List<Uint8List> _pendingPackets = <Uint8List>[];
   final BytesBuilder _packetInProgress = BytesBuilder(copy: false);
 
   OggAudioCodec? audioCodec;
+  FlacDecoder? flacDecoder;
 
   OggDecoder({required this.track}) {
     source = track.openSync();
@@ -35,11 +38,12 @@ class OggDecoder {
   ///
   /// For now, only OGG-FLAC is supported.
   void decode() {
-    bufferedSource.setPositionSync(0);
-    _pendingPackets.clear();
-    _packetInProgress.takeBytes();
+    final List<Uint8List> packets = _readAllPackets();
+    if (packets.isEmpty) {
+      throw const FormatException('Empty OGG stream: no packet found.');
+    }
 
-    final Uint8List identificationPacket = _readNextPacket();
+    final Uint8List identificationPacket = packets.first;
     audioCodec = _detectCodec(identificationPacket);
 
     if (audioCodec != OggAudioCodec.flac) {
@@ -48,19 +52,47 @@ class OggDecoder {
         'Only FLAC is supported for now.',
       );
     }
+
+    final Uint8List nativeFlacStream = _buildNativeFlacStream(packets);
+    _prepareFlacDecoder(nativeFlacStream);
+
+    try {
+      flacDecoder!.decode();
+    } catch (_) {
+      _disposeFlacDecoderArtifacts();
+      rethrow;
+    }
   }
 
   void close() {
+    _disposeFlacDecoderArtifacts();
     source.closeSync();
   }
 
-  Uint8List _readNextPacket() {
-    while (_pendingPackets.isEmpty) {
+  List<Uint8List> _readAllPackets() {
+    bufferedSource.setPositionSync(0);
+    source.setPositionSync(0);
+    _pendingPackets.clear();
+    _packetInProgress.takeBytes();
+
+    final List<Uint8List> packets = <Uint8List>[];
+    bool hasReachedEndOfStream = false;
+
+    while (!hasReachedEndOfStream) {
       final OggPage page = demuxer.readPage();
       _appendPacketsFromPage(page);
+      hasReachedEndOfStream = page.isEndOfStream;
+
+      while (_pendingPackets.isNotEmpty) {
+        packets.add(_pendingPackets.removeAt(0));
+      }
     }
 
-    return _pendingPackets.removeAt(0);
+    if (_packetInProgress.length != 0) {
+      throw const FormatException('Truncated OGG packet at end of stream.');
+    }
+
+    return packets;
   }
 
   void _appendPacketsFromPage(OggPage page) {
@@ -110,6 +142,65 @@ class OggDecoder {
     return OggAudioCodec.unknown;
   }
 
+  Uint8List _buildNativeFlacStream(List<Uint8List> packets) {
+    final Uint8List identificationPacket = packets.first;
+
+    if (identificationPacket.length <= _oggFlacMappingHeaderLength) {
+      throw const FormatException('Invalid OGG-FLAC identification packet.');
+    }
+
+    if (!_startsWithAt(
+      identificationPacket,
+      _nativeFlacMagic,
+      _oggFlacMappingHeaderLength,
+    )) {
+      throw const FormatException(
+        'OGG-FLAC identification packet does not contain native "fLaC" magic.',
+      );
+    }
+
+    final BytesBuilder flacStream = BytesBuilder(copy: false);
+    flacStream.add(
+      Uint8List.sublistView(
+        identificationPacket,
+        _oggFlacMappingHeaderLength,
+      ),
+    );
+
+    for (int packetIndex = 1; packetIndex < packets.length; packetIndex++) {
+      flacStream.add(packets[packetIndex]);
+    }
+
+    return flacStream.takeBytes();
+  }
+
+  void _prepareFlacDecoder(Uint8List nativeFlacStream) {
+    _disposeFlacDecoderArtifacts();
+
+    _temporaryDecodeDirectory =
+        Directory.systemTemp.createTempSync('audio_codec_ogg_flac_');
+    final String flacFilePath =
+        '${_temporaryDecodeDirectory!.path}${Platform.pathSeparator}stream.flac';
+    final File flacFile = File(flacFilePath);
+
+    flacFile.writeAsBytesSync(nativeFlacStream, flush: true);
+    flacDecoder = FlacDecoder(track: flacFile);
+  }
+
+  void _disposeFlacDecoderArtifacts() {
+    if (flacDecoder != null) {
+      flacDecoder!.close();
+      flacDecoder = null;
+    }
+
+    if (_temporaryDecodeDirectory != null) {
+      if (_temporaryDecodeDirectory!.existsSync()) {
+        _temporaryDecodeDirectory!.deleteSync(recursive: true);
+      }
+      _temporaryDecodeDirectory = null;
+    }
+  }
+
   bool _startsWith(Uint8List bytes, List<int> prefix) {
     if (bytes.length < prefix.length) {
       return false;
@@ -122,10 +213,32 @@ class OggDecoder {
     }
     return true;
   }
+
+  bool _startsWithAt(Uint8List bytes, List<int> prefix, int offset) {
+    if (offset < 0) {
+      return false;
+    }
+    if (bytes.length < offset + prefix.length) {
+      return false;
+    }
+
+    for (int index = 0; index < prefix.length; index++) {
+      if (bytes[offset + index] != prefix[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
 }
+
+// OGG-FLAC mapping header length before native FLAC data:
+// 0x7F + "FLAC" + major/minor version + header-packets count.
+const int _oggFlacMappingHeaderLength = 9;
 
 // OGG-FLAC identification packet starts with 0x7F then ASCII "FLAC".
 const List<int> _oggFlacSignature = <int>[0x7F, 0x46, 0x4C, 0x41, 0x43];
+// Native FLAC stream starts with ASCII "fLaC".
+const List<int> _nativeFlacMagic = <int>[0x66, 0x4C, 0x61, 0x43];
 // OGG-Vorbis identification packet starts with 0x01 then ASCII "vorbis".
 const List<int> _oggVorbisSignature = <int>[
   0x01,
