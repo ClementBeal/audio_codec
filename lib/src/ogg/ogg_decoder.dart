@@ -22,6 +22,7 @@ class OggDecoder {
 
   final List<Uint8List> _pendingPackets = <Uint8List>[];
   final BytesBuilder _packetInProgress = BytesBuilder(copy: false);
+  bool _hasReachedEndOfStream = false;
 
   OggAudioCodec? audioCodec;
   FlacDecoder? flacDecoder;
@@ -37,12 +38,12 @@ class OggDecoder {
   ///
   /// For now, only OGG-FLAC is supported.
   void decode() {
-    final List<Uint8List> packets = _readAllPackets();
-    if (packets.isEmpty) {
+    _resetPacketReader();
+    final Uint8List? identificationPacket = _readNextPacketOrNull();
+    if (identificationPacket == null) {
       throw const FormatException('Empty OGG stream: no packet found.');
     }
 
-    final Uint8List identificationPacket = packets.first;
     audioCodec = _detectCodec(identificationPacket);
 
     if (audioCodec != OggAudioCodec.flac) {
@@ -52,8 +53,16 @@ class OggDecoder {
       );
     }
 
-    final Uint8List nativeFlacStream = _buildNativeFlacStream(packets);
-    _prepareFlacDecoder(nativeFlacStream);
+    final Uint8List firstNativeFlacChunk =
+        _buildFirstNativeFlacChunk(identificationPacket);
+    bool hasProvidedFirstChunk = false;
+    _prepareFlacDecoder(() {
+      if (!hasProvidedFirstChunk) {
+        hasProvidedFirstChunk = true;
+        return firstNativeFlacChunk;
+      }
+      return _readNextPacketOrNull();
+    });
 
     try {
       flacDecoder!.decode();
@@ -68,30 +77,34 @@ class OggDecoder {
     source.closeSync();
   }
 
-  List<Uint8List> _readAllPackets() {
+  void _resetPacketReader() {
     bufferedSource.setPositionSync(0);
     source.setPositionSync(0);
     _pendingPackets.clear();
     _packetInProgress.takeBytes();
+    _hasReachedEndOfStream = false;
+  }
 
-    final List<Uint8List> packets = <Uint8List>[];
-    bool hasReachedEndOfStream = false;
-
-    while (!hasReachedEndOfStream) {
-      final OggPage page = demuxer.readPage();
-      _appendPacketsFromPage(page);
-      hasReachedEndOfStream = page.isEndOfStream;
-
-      while (_pendingPackets.isNotEmpty) {
-        packets.add(_pendingPackets.removeAt(0));
+  Uint8List? _readNextPacketOrNull() {
+    while (_pendingPackets.isEmpty) {
+      if (_hasReachedEndOfStream) {
+        if (_packetInProgress.length != 0) {
+          throw const FormatException('Truncated OGG packet at end of stream.');
+        }
+        return null;
       }
+
+      final OggPage page;
+      try {
+        page = demuxer.readPage();
+      } on StateError {
+        throw const FormatException('Unexpected EOF while reading OGG stream.');
+      }
+      _appendPacketsFromPage(page);
+      _hasReachedEndOfStream = page.isEndOfStream;
     }
 
-    if (_packetInProgress.length != 0) {
-      throw const FormatException('Truncated OGG packet at end of stream.');
-    }
-
-    return packets;
+    return _pendingPackets.removeAt(0);
   }
 
   void _appendPacketsFromPage(OggPage page) {
@@ -141,9 +154,7 @@ class OggDecoder {
     return OggAudioCodec.unknown;
   }
 
-  Uint8List _buildNativeFlacStream(List<Uint8List> packets) {
-    final Uint8List identificationPacket = packets.first;
-
+  Uint8List _buildFirstNativeFlacChunk(Uint8List identificationPacket) {
     if (identificationPacket.length <= _oggFlacMappingHeaderLength) {
       throw const FormatException('Invalid OGG-FLAC identification packet.');
     }
@@ -158,24 +169,15 @@ class OggDecoder {
       );
     }
 
-    final BytesBuilder flacStream = BytesBuilder(copy: false);
-    flacStream.add(
-      Uint8List.sublistView(
-        identificationPacket,
-        _oggFlacMappingHeaderLength,
-      ),
+    return Uint8List.sublistView(
+      identificationPacket,
+      _oggFlacMappingHeaderLength,
     );
-
-    for (int packetIndex = 1; packetIndex < packets.length; packetIndex++) {
-      flacStream.add(packets[packetIndex]);
-    }
-
-    return flacStream.takeBytes();
   }
 
-  void _prepareFlacDecoder(Uint8List nativeFlacStream) {
+  void _prepareFlacDecoder(NextChunk nextChunk) {
     _disposeFlacDecoderArtifacts();
-    flacDecoder = FlacDecoder.fromBytes(nativeFlacStream);
+    flacDecoder = FlacDecoder.fromChunkSource(nextChunk);
   }
 
   void _disposeFlacDecoderArtifacts() {

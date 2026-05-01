@@ -45,6 +45,10 @@ class FlacDecoder {
     bufferedFile = Buffer.fromBytes(bytes);
   }
 
+  FlacDecoder.fromChunkSource(NextChunk nextChunk) {
+    bufferedFile = Buffer.fromChunkSource(nextChunk);
+  }
+
   static Future<FlacDecoder> fromByteStream(
       Stream<List<int>> byteStream) async {
     final bytesBuilder = BytesBuilder(copy: false);

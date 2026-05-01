@@ -1,11 +1,16 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+typedef NextChunk = Uint8List? Function();
+
 /// A buffered file that minimize the IO
 class Buffer {
   final RandomAccessFile? _randomAccessFile;
   final Uint8List? _sourceBytes;
+  final NextChunk? _nextChunk;
   int _sourceOffset = 0;
+  Uint8List _chunkBuffer = Uint8List(0);
+  int _chunkBufferCursor = 0;
 
   /// Contains the data read from the [randomAccessFile]
   late final Uint8List _buffer;
@@ -35,14 +40,24 @@ class Buffer {
 
   Buffer({required RandomAccessFile randomAccessFile})
       : _randomAccessFile = randomAccessFile,
-        _sourceBytes = null {
+        _sourceBytes = null,
+        _nextChunk = null {
     _buffer = Uint8List(bufferedFile);
     _fill();
   }
 
   Buffer.fromBytes(Uint8List bytes)
       : _randomAccessFile = null,
-        _sourceBytes = bytes {
+        _sourceBytes = bytes,
+        _nextChunk = null {
+    _buffer = Uint8List(bufferedFile);
+    _fill();
+  }
+
+  Buffer.fromChunkSource(NextChunk nextChunk)
+      : _randomAccessFile = null,
+        _sourceBytes = null,
+        _nextChunk = nextChunk {
     _buffer = Uint8List(bufferedFile);
     _fill();
   }
@@ -65,20 +80,55 @@ class Buffer {
       return _bufferedBytes > 0;
     }
 
-    final bytes = _sourceBytes!;
-    if (_sourceOffset >= bytes.length) {
-      _bufferedBytes = 0;
+    if (_sourceBytes != null) {
+      final bytes = _sourceBytes!;
+      if (_sourceOffset >= bytes.length) {
+        _bufferedBytes = 0;
+        _cursor = 0;
+        return false;
+      }
+
+      final remaining = bytes.length - _sourceOffset;
+      final toCopy = remaining < bufferedFile ? remaining : bufferedFile;
+      _buffer.setRange(0, toCopy, bytes, _sourceOffset);
+      _sourceOffset += toCopy;
+      _bufferedBytes = toCopy;
       _cursor = 0;
-      return false;
+      return _bufferedBytes > 0;
     }
 
-    final remaining = bytes.length - _sourceOffset;
-    final toCopy = remaining < bufferedFile ? remaining : bufferedFile;
-    _buffer.setRange(0, toCopy, bytes, _sourceOffset);
-    _sourceOffset += toCopy;
-    _bufferedBytes = toCopy;
-    _cursor = 0;
+    int written = 0;
+    while (written < bufferedFile) {
+      if (_chunkBufferCursor >= _chunkBuffer.length) {
+        final chunk = _nextChunk!.call();
+        if (chunk == null) {
+          break;
+        }
+        if (chunk.isEmpty) {
+          continue;
+        }
+        _chunkBuffer = chunk;
+        _chunkBufferCursor = 0;
+      }
 
+      int available = _chunkBuffer.length - _chunkBufferCursor;
+      int toCopy = bufferedFile - written;
+      if (toCopy > available) {
+        toCopy = available;
+      }
+
+      _buffer.setRange(
+        written,
+        written + toCopy,
+        _chunkBuffer,
+        _chunkBufferCursor,
+      );
+      written += toCopy;
+      _chunkBufferCursor += toCopy;
+    }
+
+    _bufferedBytes = written;
+    _cursor = 0;
     return _bufferedBytes > 0;
   }
 
@@ -150,12 +200,19 @@ class Buffer {
       return;
     }
 
-    final bytesLength = _sourceBytes!.length;
-    if (position < 0 || position > bytesLength) {
-      throw RangeError.range(position, 0, bytesLength, 'position');
+    if (_sourceBytes != null) {
+      final bytesLength = _sourceBytes!.length;
+      if (position < 0 || position > bytesLength) {
+        throw RangeError.range(position, 0, bytesLength, 'position');
+      }
+      _sourceOffset = position;
+      _fill();
+      return;
     }
-    _sourceOffset = position;
-    _fill();
+
+    throw UnsupportedError(
+      'setPositionSync is not supported for chunked streaming source.',
+    );
   }
 
   /// Skip [length] bytes in the buffer
@@ -175,7 +232,12 @@ class Buffer {
             _randomAccessFile!.positionSync() - remainingInBuffer;
         // Skip to the new position
         _randomAccessFile!.setPositionSync(currentPosition + length);
-      } else {
+        // Refill the buffer at the new position/source offset
+        _fill();
+        return;
+      }
+
+      if (_sourceBytes != null) {
         final int bytesLength = _sourceBytes!.length;
         final int skipOutsideBuffer = length - remainingInBuffer;
         int nextSourceOffset = _sourceOffset + skipOutsideBuffer;
@@ -183,9 +245,27 @@ class Buffer {
           nextSourceOffset = bytesLength;
         }
         _sourceOffset = nextSourceOffset;
+        // Refill the buffer at the new position/source offset
+        _fill();
+        return;
       }
-      // Refill the buffer at the new position/source offset
-      _fill();
+
+      int remainingToSkip = length - remainingInBuffer;
+      _cursor = _bufferedBytes;
+
+      while (remainingToSkip > 0) {
+        if (!_fill()) {
+          _cursor = _bufferedBytes;
+          return;
+        }
+
+        if (remainingToSkip <= _bufferedBytes) {
+          _cursor = remainingToSkip;
+          return;
+        }
+        remainingToSkip -= _bufferedBytes;
+        _cursor = _bufferedBytes;
+      }
     }
   }
 
