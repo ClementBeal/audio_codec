@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:audio_codec/src/flac/linear_predictor.dart';
 import 'package:audio_codec/src/utils/buffer.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
 import 'package:convert/convert.dart';
@@ -10,6 +9,9 @@ import 'package:crypto/crypto.dart';
 import 'package:audio_codec/src/utils/number.dart';
 
 typedef Samples = Int32List;
+
+const int _metadataBlockTypeStreamInfo = 0;
+const int _metadataBlockTypeSeekTable = 3;
 
 /// Contains all the metadata information that can be useful
 class FlacResult {
@@ -48,9 +50,9 @@ class FlacDecoder {
     do {
       currentBlock = _readBlock();
 
-      if (currentBlock.blockType == 0) {
+      if (currentBlock.blockType == _metadataBlockTypeStreamInfo) {
         result.streamInfoBlock = _readStreamInfoBlock();
-      } else if (currentBlock.blockType == 3) {
+      } else if (currentBlock.blockType == _metadataBlockTypeSeekTable) {
         result.seekpoints = readSeektableBlock(currentBlock.length);
       } else {
         bufferedFile.skip(currentBlock.length);
@@ -230,7 +232,8 @@ class FlacDecoder {
         bytes.add(blockSize);
       } else {
         final blockSize = bufferedFile.read(2);
-        blockSizeInInterChannelSamples = blockSize[0] << 8 | blockSize[1] + 1;
+        blockSizeInInterChannelSamples =
+            ((blockSize[0] << 8) | blockSize[1]) + 1;
         bytes.addAll(blockSize);
       }
     }
@@ -289,40 +292,26 @@ class FlacDecoder {
     );
   }
 
-  Future<void> _addToMd5(List<Samples> subframes, int bitDepth) async {
-    // 1. Pre-allocate a buffer for a frame's worth of data
+  void _addToMd5(List<Samples> subframes, int bitDepth) {
+    final bytesPerSample = (bitDepth + 7) >> 3;
     final frameSize =
-        subframes.first.length * subframes.length * (bitDepth ~/ 8);
+        subframes.first.length * subframes.length * bytesPerSample;
     final frameBuffer = Uint8List(frameSize);
-    final byteData = ByteData.view(frameBuffer.buffer);
 
     int offset = 0;
     for (var i = 0; i < subframes.first.length; i++) {
       for (var j = 0; j < subframes.length; j++) {
         final sample = subframes[j][i];
-
-        // 2. Optimized sample conversion based on bit depth
-        if (bitDepth == 16) {
-          byteData.setInt16(offset, sample, Endian.little);
-          offset += 2;
-        } else if (bitDepth == 24) {
-          // Assuming your toBytes() handles 24-bit by padding to 32-bit
-          byteData.setInt32(offset, sample, Endian.little);
-          offset += 3;
-        } else if (bitDepth == 8) {
-          byteData.setInt8(offset, sample);
-          offset += 1;
-        } else if (bitDepth == 32) {
-          byteData.setInt32(offset, sample, Endian.little);
-          offset += 4;
-        } else {
-          throw Exception("Unsupported bit depth: $bitDepth");
+        // The FLAC MD5 input is signed little-endian, byte-aligned.
+        // For non-byte-aligned depths (e.g. 12/20 bits), values are sign-extended
+        // to the next whole number of bytes before hashing.
+        for (var b = 0; b < bytesPerSample; b++) {
+          frameBuffer[offset++] = (sample >> (8 * b)) & 0xFF;
         }
       }
     }
 
-    // 3. Add the entire frame's data to the MD5 input in one go
-    md5Input.add(frameBuffer); // Update the digest directly
+    md5Input.add(frameBuffer);
   }
 
   /// Check that the decoded samples are correct. We compare the MD5 checksum from the
@@ -407,44 +396,35 @@ class FlacDecoder {
 
     _subframeVerbatim(bitReader, effectiveBitdepth, wastedBits, order, samples);
 
-    final residualSampleValues = _decodeRiceCode(bitReader, blockSize, order);
+    _decodeRiceCode(bitReader, blockSize, order,
+        (residualIndex, residualValue) {
+      final i = order + residualIndex;
 
-    switch (order) {
-      case 0:
-        for (var i = order; i < blockSize; i++) {
-          samples[i] = residualSampleValues[i - order];
-        }
-        break;
-      case 1:
-        for (var i = order; i < blockSize; i++) {
-          samples[i] = samples[i - 1] + residualSampleValues[i - order];
-        }
-        break;
-      case 2:
-        for (var i = order; i < blockSize; i++) {
-          samples[i] = 2 * samples[i - 1] -
-              samples[i - 2] +
-              residualSampleValues[i - order];
-        }
-        break;
-      case 3:
-        for (var i = order; i < blockSize; i++) {
+      switch (order) {
+        case 0:
+          samples[i] = residualValue;
+          break;
+        case 1:
+          samples[i] = samples[i - 1] + residualValue;
+          break;
+        case 2:
+          samples[i] = 2 * samples[i - 1] - samples[i - 2] + residualValue;
+          break;
+        case 3:
           samples[i] = 3 * samples[i - 1] -
               3 * samples[i - 2] +
               samples[i - 3] +
-              residualSampleValues[i - order];
-        }
-        break;
-      case 4:
-        for (var i = order; i < blockSize; i++) {
+              residualValue;
+          break;
+        case 4:
           samples[i] = 4 * samples[i - 1] -
               6 * samples[i - 2] +
               4 * samples[i - 3] -
               samples[i - 4] +
-              residualSampleValues[i - order];
-        }
-        break;
-    }
+              residualValue;
+          break;
+      }
+    });
   }
 
   void _subframeLinear(
@@ -470,15 +450,27 @@ class FlacDecoder {
       coefficients[i] = bitReader.readSigned(coefficientPrecision);
     }
 
-    final residuals =
-        _decodeRiceCode(bitReader, blockSize, linearPredictorOrder);
+    _decodeRiceCode(bitReader, blockSize, linearPredictorOrder,
+        (residualIndex, residualValue) {
+      final sampleIndex = linearPredictorOrder + residualIndex;
+      int prediction = 0;
 
-    computeLinearPredictor(linearPredictorOrder, blockSize, samples,
-        coefficients, rightShiftNeeded, residuals);
+      for (int j = 0; j < linearPredictorOrder; j++) {
+        prediction += coefficients[j] * samples[sampleIndex - 1 - j];
+      }
+
+      samples[sampleIndex] = (prediction >> rightShiftNeeded) + residualValue;
+    });
   }
 
-  Samples _decodeRiceCode(Buffer bitReader, int blockSize, int predictorOrder) {
-    final nbResidualValues = blockSize - predictorOrder;
+  /// Decode Rice-coded residuals and emit them one by one through [onResidual].
+  ///
+  /// Specificity: this is intentionally streaming (no residual buffer allocation).
+  /// We decode each residual and immediately hand it to the caller so subframe
+  /// reconstruction can be applied on the fly in `samples`.
+  /// This removes an intermediate `residualSampleValues` pass and reduces memory/CPU.
+  void _decodeRiceCode(Buffer bitReader, int blockSize, int predictorOrder,
+      void Function(int residualIndex, int residualValue) onResidual) {
     final riceCodeValue = bitReader.readUnsigned(2);
 
     int bitToRead = switch (riceCodeValue) {
@@ -491,7 +483,6 @@ class FlacDecoder {
 
     final totalPartitions = 1 << partitionOrder;
 
-    final residualSampleValues = Samples(nbResidualValues);
     int residualId = 0;
 
     for (int actualPartition = 0;
@@ -504,21 +495,22 @@ class FlacDecoder {
       final riceParameter = bitReader.readUnsigned(bitToRead);
       bool hasEscaped =
           (riceCodeValue == 0) ? riceParameter == 15 : riceParameter == 31;
+      int? escapedResidualBitWidth;
 
       if (hasEscaped) {
-        bitReader.readUnsigned(5);
+        // Escaped Rice coding stores the residual bit width on 5 bits,
+        // then each residual in this partition is read using that width.
+        escapedResidualBitWidth = bitReader.readUnsigned(5);
       }
 
       for (int i = 0; i < totalElementsInPartition; i++) {
         if (hasEscaped) {
-          residualSampleValues[residualId++] = bitReader.readSigned(5);
+          final bitWidth = escapedResidualBitWidth!;
+          final residualValue =
+              bitWidth == 0 ? 0 : bitReader.readSigned(bitWidth);
+          onResidual(residualId++, residualValue);
         } else {
-          int quotient = 0;
-
-          // Decode the quotient (unary part)
-          while (bitReader.readBit() == 0) {
-            quotient++;
-          }
+          final quotient = bitReader.readUnaryZeroCount();
 
           int residualSampleValue;
           if (riceParameter == 0) {
@@ -537,12 +529,10 @@ class FlacDecoder {
               ? (residualSampleValue >> 1)
               : -((residualSampleValue + 1) >> 1);
 
-          residualSampleValues[residualId++] = residualSampleValue;
+          onResidual(residualId++, residualSampleValue);
         }
       }
     }
-
-    return residualSampleValues;
   }
 
   int _calculateCRC16(List<int> data) {
@@ -813,10 +803,16 @@ void decorrelateLeftSide(Samples leftChannel, Samples sideChannel) {
 
 void decorrelateMidSide(Samples midChannel, Samples sideChannel) {
   for (var i = 0; i < midChannel.length; i++) {
-    final m = midChannel[i];
-    final s = sideChannel[i];
-    final l = (m + s) >> 2;
-    final r = l + s;
+    final mid = midChannel[i];
+    final side = sideChannel[i];
+
+    // FLAC mid-side restoration:
+    // sum = left + right = (mid << 1) + (side & 1)
+    // left  = (sum + side) >> 1
+    // right = (sum - side) >> 1
+    final sum = (mid << 1) + (side & 1);
+    final l = (sum + side) >> 1;
+    final r = (sum - side) >> 1;
     midChannel[i] = l;
     sideChannel[i] = r;
   }

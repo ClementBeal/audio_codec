@@ -57,7 +57,7 @@ class Buffer {
       final remaining = _bufferedBytes - _cursor;
 
       if (remaining > 0) {
-        result.setRange(0, remaining, _buffer, _cursor);
+        result.setAll(0, _buffer.sublist(_cursor, _cursor + remaining));
       }
 
       randomAccessFile.readIntoSync(result, remaining);
@@ -69,10 +69,7 @@ class Buffer {
     // If we have enough data in the buffer
     if (size <= _bufferedBytes - _cursor) {
       final result = Uint8List(size);
-
-      for (int i = 0; i < size; i++) {
-        result[i] = _buffer[_cursor + i];
-      }
+      result.setRange(0, size, _buffer, _cursor);
 
       _cursor += size;
       return result;
@@ -81,9 +78,8 @@ class Buffer {
       final result = Uint8List(size);
       int remaining = _bufferedBytes - _cursor;
       // Copy remaining data from the buffer
-
-      for (var i = 0; i < remaining; i++) {
-        result[i] = _buffer[_cursor + i];
+      if (remaining > 0) {
+        result.setRange(0, remaining, _buffer, _cursor);
       }
 
       // Adjust the cursor. Stores the total bytes we have
@@ -100,9 +96,7 @@ class Buffer {
           toCopy = _bufferedBytes;
         }
 
-        for (var i = filled; i < filled + toCopy; i++) {
-          result[i] = _buffer[i - filled];
-        }
+        result.setRange(filled, filled + toCopy, _buffer);
 
         filled += toCopy;
         _cursor = toCopy;
@@ -199,6 +193,40 @@ class Buffer {
   /// Reads [bitCount] bits and returns a signed integer.
   int readSigned(int bitCount) {
     return _readBits(bitCount).toSigned(bitCount);
+  }
+
+  /// Reads a unary value used by Rice coding:
+  /// counts consecutive `0` bits until the first `1` bit (which is consumed).
+  int readUnaryZeroCount() {
+    int zeroCount = 0;
+
+    while (true) {
+      if (_cursor >= _bufferedBytes && !_fill()) {
+        throw StateError('Unexpected end of buffer while reading unary code');
+      }
+
+      final currentByte = _buffer[_cursor];
+      final availableBits = _bitCount + 1;
+      final mask = (1 << availableBits) - 1;
+      final remainingBits = currentByte & mask;
+
+      if (remainingBits == 0) {
+        zeroCount += availableBits;
+        _bitCount = -1;
+        _updateBitCursor();
+        continue;
+      }
+
+      // Highest set bit inside the remaining range gives the first `1` we will read.
+      final highestSetBit = remainingBits.bitLength - 1;
+      final zerosInThisByte = _bitCount - highestSetBit;
+      zeroCount += zerosInThisByte;
+
+      // Consume zeros + terminating `1`.
+      _bitCount -= (zerosInThisByte + 1);
+      _updateBitCursor();
+      return zeroCount;
+    }
   }
 
   void align() {
