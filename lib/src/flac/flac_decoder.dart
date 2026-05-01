@@ -504,14 +504,19 @@ class FlacDecoder {
       final riceParameter = bitReader.readUnsigned(bitToRead);
       bool hasEscaped =
           (riceCodeValue == 0) ? riceParameter == 15 : riceParameter == 31;
+      int? escapedResidualBitWidth;
 
       if (hasEscaped) {
-        bitReader.readUnsigned(5);
+        // Escaped Rice coding stores the residual bit width on 5 bits,
+        // then each residual in this partition is read using that width.
+        escapedResidualBitWidth = bitReader.readUnsigned(5);
       }
 
       for (int i = 0; i < totalElementsInPartition; i++) {
         if (hasEscaped) {
-          residualSampleValues[residualId++] = bitReader.readSigned(5);
+          final bitWidth = escapedResidualBitWidth!;
+          residualSampleValues[residualId++] =
+              bitWidth == 0 ? 0 : bitReader.readSigned(bitWidth);
         } else {
           int quotient = 0;
 
