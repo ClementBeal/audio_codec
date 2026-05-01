@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import 'package:audio_codec/src/demuxer/ogg_demuxer.dart';
 import 'package:audio_codec/src/flac/flac_decoder.dart';
-import 'package:audio_codec/src/utils/buffer.dart';
 
 enum OggAudioCodec {
   flac,
@@ -17,20 +16,19 @@ class OggDecoder {
   final File track;
 
   late final RandomAccessFile source;
-  late final Buffer bufferedSource;
   late final OggDemuxer demuxer;
 
   final List<Uint8List> _pendingPackets = <Uint8List>[];
   final BytesBuilder _packetInProgress = BytesBuilder(copy: false);
   bool _hasReachedEndOfStream = false;
+  Uint8List? _firstFlacChunk;
 
   OggAudioCodec? audioCodec;
   FlacDecoder? flacDecoder;
 
   OggDecoder({required this.track}) {
     source = track.openSync();
-    bufferedSource = Buffer(randomAccessFile: source);
-    demuxer = OggDemuxer(source: bufferedSource.randomAccessFile);
+    demuxer = OggDemuxer(source: source);
   }
 
   /// Start decoding by reading the OGG identification packet
@@ -38,7 +36,7 @@ class OggDecoder {
   ///
   /// For now, only OGG-FLAC is supported.
   void decode() {
-    _resetPacketReader();
+    _resetStreamReader();
     final Uint8List? identificationPacket = _readNextPacketOrNull();
     if (identificationPacket == null) {
       throw const FormatException('Empty OGG stream: no packet found.');
@@ -53,16 +51,9 @@ class OggDecoder {
       );
     }
 
-    final Uint8List firstNativeFlacChunk =
-        _buildFirstNativeFlacChunk(identificationPacket);
-    bool hasProvidedFirstChunk = false;
-    _prepareFlacDecoder(() {
-      if (!hasProvidedFirstChunk) {
-        hasProvidedFirstChunk = true;
-        return firstNativeFlacChunk;
-      }
-      return _readNextPacketOrNull();
-    });
+    _disposeFlacDecoderArtifacts();
+    _firstFlacChunk = _extractFirstNativeFlacChunk(identificationPacket);
+    flacDecoder = FlacDecoder.fromChunkSource(_readNextFlacChunkOrNull);
 
     try {
       flacDecoder!.decode();
@@ -77,12 +68,12 @@ class OggDecoder {
     source.closeSync();
   }
 
-  void _resetPacketReader() {
-    bufferedSource.setPositionSync(0);
+  void _resetStreamReader() {
     source.setPositionSync(0);
     _pendingPackets.clear();
     _packetInProgress.takeBytes();
     _hasReachedEndOfStream = false;
+    _firstFlacChunk = null;
   }
 
   Uint8List? _readNextPacketOrNull() {
@@ -105,6 +96,15 @@ class OggDecoder {
     }
 
     return _pendingPackets.removeAt(0);
+  }
+
+  Uint8List? _readNextFlacChunkOrNull() {
+    final Uint8List? firstChunk = _firstFlacChunk;
+    if (firstChunk != null) {
+      _firstFlacChunk = null;
+      return firstChunk;
+    }
+    return _readNextPacketOrNull();
   }
 
   void _appendPacketsFromPage(OggPage page) {
@@ -135,34 +135,34 @@ class OggDecoder {
   }
 
   OggAudioCodec _detectCodec(Uint8List identificationPacket) {
-    if (_startsWith(identificationPacket, _oggFlacSignature)) {
+    if (_matchesPrefix(identificationPacket, _oggFlacSignature)) {
       return OggAudioCodec.flac;
     }
 
-    if (_startsWith(identificationPacket, _oggVorbisSignature)) {
+    if (_matchesPrefix(identificationPacket, _oggVorbisSignature)) {
       return OggAudioCodec.vorbis;
     }
 
-    if (_startsWith(identificationPacket, _oggOpusSignature)) {
+    if (_matchesPrefix(identificationPacket, _oggOpusSignature)) {
       return OggAudioCodec.opus;
     }
 
-    if (_startsWith(identificationPacket, _oggSpeexSignature)) {
+    if (_matchesPrefix(identificationPacket, _oggSpeexSignature)) {
       return OggAudioCodec.speex;
     }
 
     return OggAudioCodec.unknown;
   }
 
-  Uint8List _buildFirstNativeFlacChunk(Uint8List identificationPacket) {
+  Uint8List _extractFirstNativeFlacChunk(Uint8List identificationPacket) {
     if (identificationPacket.length <= _oggFlacMappingHeaderLength) {
       throw const FormatException('Invalid OGG-FLAC identification packet.');
     }
 
-    if (!_startsWithAt(
+    if (!_matchesPrefix(
       identificationPacket,
       _nativeFlacMagic,
-      _oggFlacMappingHeaderLength,
+      offset: _oggFlacMappingHeaderLength,
     )) {
       throw const FormatException(
         'OGG-FLAC identification packet does not contain native "fLaC" magic.',
@@ -175,32 +175,19 @@ class OggDecoder {
     );
   }
 
-  void _prepareFlacDecoder(NextChunk nextChunk) {
-    _disposeFlacDecoderArtifacts();
-    flacDecoder = FlacDecoder.fromChunkSource(nextChunk);
-  }
-
   void _disposeFlacDecoderArtifacts() {
     if (flacDecoder != null) {
       flacDecoder!.close();
       flacDecoder = null;
     }
+    _firstFlacChunk = null;
   }
 
-  bool _startsWith(Uint8List bytes, List<int> prefix) {
-    if (bytes.length < prefix.length) {
-      return false;
-    }
-
-    for (int index = 0; index < prefix.length; index++) {
-      if (bytes[index] != prefix[index]) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  bool _startsWithAt(Uint8List bytes, List<int> prefix, int offset) {
+  bool _matchesPrefix(
+    Uint8List bytes,
+    List<int> prefix, {
+    int offset = 0,
+  }) {
     if (offset < 0) {
       return false;
     }
