@@ -69,10 +69,7 @@ class Buffer {
     // If we have enough data in the buffer
     if (size <= _bufferedBytes - _cursor) {
       final result = Uint8List(size);
-
-      for (int i = 0; i < size; i++) {
-        result[i] = _buffer[_cursor + i];
-      }
+      result.setRange(0, size, _buffer, _cursor);
 
       _cursor += size;
       return result;
@@ -81,9 +78,8 @@ class Buffer {
       final result = Uint8List(size);
       int remaining = _bufferedBytes - _cursor;
       // Copy remaining data from the buffer
-
-      for (var i = 0; i < remaining; i++) {
-        result[i] = _buffer[_cursor + i];
+      if (remaining > 0) {
+        result.setRange(0, remaining, _buffer, _cursor);
       }
 
       // Adjust the cursor. Stores the total bytes we have
@@ -100,9 +96,7 @@ class Buffer {
           toCopy = _bufferedBytes;
         }
 
-        for (var i = filled; i < filled + toCopy; i++) {
-          result[i] = _buffer[i - filled];
-        }
+        result.setRange(filled, filled + toCopy, _buffer);
 
         filled += toCopy;
         _cursor = toCopy;
