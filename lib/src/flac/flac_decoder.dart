@@ -813,10 +813,16 @@ void decorrelateLeftSide(Samples leftChannel, Samples sideChannel) {
 
 void decorrelateMidSide(Samples midChannel, Samples sideChannel) {
   for (var i = 0; i < midChannel.length; i++) {
-    final m = midChannel[i];
-    final s = sideChannel[i];
-    final l = (m + s) >> 2;
-    final r = l + s;
+    final mid = midChannel[i];
+    final side = sideChannel[i];
+
+    // FLAC mid-side restoration:
+    // sum = left + right = (mid << 1) + (side & 1)
+    // left  = (sum + side) >> 1
+    // right = (sum - side) >> 1
+    final sum = (mid << 1) + (side & 1);
+    final l = (sum + side) >> 1;
+    final r = (sum - side) >> 1;
     midChannel[i] = l;
     sideChannel[i] = r;
   }
