@@ -35,7 +35,7 @@ class FlacDecoder {
   late final md5Input = md5.startChunkedConversion(output);
   int totalSamples = 0;
 
-  FlacDecoder({required File track}) {
+  FlacDecoder.fromFile(File track) {
     reader = track.openSync();
     bufferedFile = Buffer(randomAccessFile: reader);
   }

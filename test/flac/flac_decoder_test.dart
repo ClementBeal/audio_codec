@@ -6,9 +6,8 @@ import 'package:test/test.dart';
 void main() {
   group('A group of tests', () {
     test('Official test 1', () {
-      final decoder = FlacDecoder(
-        track: File("test/flac/data/official_test_1.flac"),
-      );
+      final decoder =
+          FlacDecoder.fromFile(File("test/flac/data/official_test_1.flac"));
 
       final result = decoder.decode();
       final frame = decoder.readFrame();
@@ -58,9 +57,8 @@ void main() {
     });
 
     test('Official test 2', () {
-      final decoder = FlacDecoder(
-        track: File("test/flac/data/official_test_2.flac"),
-      );
+      final decoder =
+          FlacDecoder.fromFile(File("test/flac/data/official_test_2.flac"));
 
       final result = decoder.decode();
       final frame = decoder.readFrame();
@@ -161,9 +159,8 @@ void main() {
     });
 
     test('Official test 3', () {
-      final decoder = FlacDecoder(
-        track: File("test/flac/data/official_test_3.flac"),
-      );
+      final decoder =
+          FlacDecoder.fromFile(File("test/flac/data/official_test_3.flac"));
 
       final result = decoder.decode();
       final frame = decoder.readFrame();

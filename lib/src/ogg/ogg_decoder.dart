@@ -184,7 +184,7 @@ class OggDecoder {
     final File flacFile = File(flacFilePath);
 
     flacFile.writeAsBytesSync(nativeFlacStream, flush: true);
-    flacDecoder = FlacDecoder(track: flacFile);
+    flacDecoder = FlacDecoder.fromFile(flacFile);
   }
 
   void _disposeFlacDecoderArtifacts() {
