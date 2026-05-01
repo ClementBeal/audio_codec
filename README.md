@@ -1,37 +1,20 @@
-# audio_codecs
+# audio_codec
 
-[![pub.dev badge](https://img.shields.io/pub/v/audio_codecs.svg)](https://pub.dev/packages/audio_codecs)
+[![pub.dev badge](https://img.shields.io/pub/v/audio_codec.svg)](https://pub.dev/packages/audio_codec)
 
-A Dart library for decoding (and potentially encoding) audio files. This package provides a convenient way to work with various audio codecs within your Dart and Flutter applications.
+A Dart library for audio decoding.
 
-## Codecs Support
+## Supported Formats
 
-| Codec | Decoding Status | Encoding Status | Notes                                                       |
-| ----- | --------------- | --------------- | ----------------------------------------------------------- |
-| FLAC  | Excellent       | -               | Decoding is stable and production-ready.                    |
-| MP3   | -               | -               | Not yet implemented.                                        |
-| OPUS  | -               | -               | Not yet implemented.                                        |
-| WAV   | -               | Good            | Writing is supported.                                       |
-| PCM   | Excellent       | Excellent       |                                                             |
-
-## Status Levels
-
-The "Status" column in the Codecs table uses the following quality indicators:
-
-| Status    | Description                                                                                                      |
-| --------- | ---------------------------------------------------------------------------------------------------------------- |
-| -         | Not started yet.                                                                                                 |
-| Passable  | The codec is partially implemented. For decoding, this might mean the file can be decoded, but with issues.      |
-| Good      | The codec is mostly functional. For decoding, it might mean files can be decoded but with some audible glitches. |
-| Excellent | The codec is fully implemented and considered stable. For decoding, it means no audible glitches.                |
+This package supports `FLAC` and `OGG + FLAC`.
 
 ## Installation
 
-Add `audio_codecs` to your `pubspec.yaml`:
+Add `audio_codec` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  audio_codecs: ^0.0.1
+  audio_codec: ^0.1.0
 ```
 
 Then, run:
@@ -46,7 +29,7 @@ dart pub get
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:audio_codec/src/flac/flac_decoder.dart';
+import 'package:audio_codec/audio_codec.dart';
 import 'package:audio_codec/src/wav/wav_encoder.dart';
 
 void main() {
