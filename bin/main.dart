@@ -7,7 +7,7 @@ void main(List<String> args) {
   final inputPath = args[0];
 
   if (inputPath.endsWith("flac")) {
-    final decoder = FlacDecoder(track: File(inputPath));
+    final decoder = FlacDecoder.fromFile(File(inputPath));
     decoder.decode(); // Decode metadata
 
     // Decode frames and write to PCM

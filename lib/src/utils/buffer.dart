@@ -1,9 +1,16 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+typedef NextChunk = Uint8List? Function();
+
 /// A buffered file that minimize the IO
 class Buffer {
-  final RandomAccessFile randomAccessFile;
+  final RandomAccessFile? _randomAccessFile;
+  final Uint8List? _sourceBytes;
+  final NextChunk? _nextChunk;
+  int _sourceOffset = 0;
+  Uint8List _chunkBuffer = Uint8List(0);
+  int _chunkBufferCursor = 0;
 
   /// Contains the data read from the [randomAccessFile]
   late final Uint8List _buffer;
@@ -31,9 +38,35 @@ class Buffer {
   int get cursor => _cursor;
   int get bufferSize => bufferedFile;
 
-  Buffer({required this.randomAccessFile}) {
+  Buffer({required RandomAccessFile randomAccessFile})
+      : _randomAccessFile = randomAccessFile,
+        _sourceBytes = null,
+        _nextChunk = null {
     _buffer = Uint8List(bufferedFile);
     _fill();
+  }
+
+  Buffer.fromBytes(Uint8List bytes)
+      : _randomAccessFile = null,
+        _sourceBytes = bytes,
+        _nextChunk = null {
+    _buffer = Uint8List(bufferedFile);
+    _fill();
+  }
+
+  Buffer.fromChunkSource(NextChunk nextChunk)
+      : _randomAccessFile = null,
+        _sourceBytes = null,
+        _nextChunk = nextChunk {
+    _buffer = Uint8List(bufferedFile);
+    _fill();
+  }
+
+  RandomAccessFile get randomAccessFile {
+    if (_randomAccessFile == null) {
+      throw StateError('This buffer is memory-backed and has no file source.');
+    }
+    return _randomAccessFile!;
   }
 
   int get bufferedBytes => _bufferedBytes;
@@ -41,9 +74,61 @@ class Buffer {
   /// Refill the [_buffer] with maximum [bufferedFile] bytes
   /// Reset the [_cursor] on 0
   bool _fill() {
-    _bufferedBytes = randomAccessFile.readIntoSync(_buffer);
-    _cursor = 0;
+    if (_randomAccessFile != null) {
+      _bufferedBytes = _randomAccessFile!.readIntoSync(_buffer);
+      _cursor = 0;
+      return _bufferedBytes > 0;
+    }
 
+    if (_sourceBytes != null) {
+      final bytes = _sourceBytes!;
+      if (_sourceOffset >= bytes.length) {
+        _bufferedBytes = 0;
+        _cursor = 0;
+        return false;
+      }
+
+      final remaining = bytes.length - _sourceOffset;
+      final toCopy = remaining < bufferedFile ? remaining : bufferedFile;
+      _buffer.setRange(0, toCopy, bytes, _sourceOffset);
+      _sourceOffset += toCopy;
+      _bufferedBytes = toCopy;
+      _cursor = 0;
+      return _bufferedBytes > 0;
+    }
+
+    int written = 0;
+    while (written < bufferedFile) {
+      if (_chunkBufferCursor >= _chunkBuffer.length) {
+        final chunk = _nextChunk!.call();
+        if (chunk == null) {
+          break;
+        }
+        if (chunk.isEmpty) {
+          continue;
+        }
+        _chunkBuffer = chunk;
+        _chunkBufferCursor = 0;
+      }
+
+      int available = _chunkBuffer.length - _chunkBufferCursor;
+      int toCopy = bufferedFile - written;
+      if (toCopy > available) {
+        toCopy = available;
+      }
+
+      _buffer.setRange(
+        written,
+        written + toCopy,
+        _chunkBuffer,
+        _chunkBufferCursor,
+      );
+      written += toCopy;
+      _chunkBufferCursor += toCopy;
+    }
+
+    _bufferedBytes = written;
+    _cursor = 0;
     return _bufferedBytes > 0;
   }
 
@@ -52,7 +137,7 @@ class Buffer {
     // if we read something big (~100kb), we can read it directly from file
     // it makes the read faster
     // no need to use the buffer
-    if (size > bufferedFile) {
+    if (size > bufferedFile && _randomAccessFile != null) {
       final result = Uint8List(size);
       final remaining = _bufferedBytes - _cursor;
 
@@ -60,7 +145,7 @@ class Buffer {
         result.setAll(0, _buffer.sublist(_cursor, _cursor + remaining));
       }
 
-      randomAccessFile.readIntoSync(result, remaining);
+      _randomAccessFile!.readIntoSync(result, remaining);
       _fill();
 
       return result;
@@ -109,8 +194,25 @@ class Buffer {
   /// Move the file cursor to the new [position]
   /// Refill the buffer
   void setPositionSync(int position) {
-    randomAccessFile.setPositionSync(position);
-    _fill();
+    if (_randomAccessFile != null) {
+      _randomAccessFile!.setPositionSync(position);
+      _fill();
+      return;
+    }
+
+    if (_sourceBytes != null) {
+      final bytesLength = _sourceBytes!.length;
+      if (position < 0 || position > bytesLength) {
+        throw RangeError.range(position, 0, bytesLength, 'position');
+      }
+      _sourceOffset = position;
+      _fill();
+      return;
+    }
+
+    throw UnsupportedError(
+      'setPositionSync is not supported for chunked streaming source.',
+    );
   }
 
   /// Skip [length] bytes in the buffer
@@ -124,12 +226,46 @@ class Buffer {
       // If we can skip within the current buffer, just move the cursor
       _cursor += length;
     } else {
-      // Calculate the actual file position we need to skip to
-      int currentPosition = randomAccessFile.positionSync() - remainingInBuffer;
-      // Skip to the new position
-      randomAccessFile.setPositionSync(currentPosition + length);
-      // Refill the buffer at the new position
-      _fill();
+      if (_randomAccessFile != null) {
+        // Calculate the actual file position we need to skip to
+        int currentPosition =
+            _randomAccessFile!.positionSync() - remainingInBuffer;
+        // Skip to the new position
+        _randomAccessFile!.setPositionSync(currentPosition + length);
+        // Refill the buffer at the new position/source offset
+        _fill();
+        return;
+      }
+
+      if (_sourceBytes != null) {
+        final int bytesLength = _sourceBytes!.length;
+        final int skipOutsideBuffer = length - remainingInBuffer;
+        int nextSourceOffset = _sourceOffset + skipOutsideBuffer;
+        if (nextSourceOffset > bytesLength) {
+          nextSourceOffset = bytesLength;
+        }
+        _sourceOffset = nextSourceOffset;
+        // Refill the buffer at the new position/source offset
+        _fill();
+        return;
+      }
+
+      int remainingToSkip = length - remainingInBuffer;
+      _cursor = _bufferedBytes;
+
+      while (remainingToSkip > 0) {
+        if (!_fill()) {
+          _cursor = _bufferedBytes;
+          return;
+        }
+
+        if (remainingToSkip <= _bufferedBytes) {
+          _cursor = remainingToSkip;
+          return;
+        }
+        remainingToSkip -= _bufferedBytes;
+        _cursor = _bufferedBytes;
+      }
     }
   }
 

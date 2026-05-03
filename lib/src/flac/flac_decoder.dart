@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -28,16 +29,35 @@ class FlacResult {
 /// 2. `readFrame()` until `.hasNextFrame()` is false
 class FlacDecoder {
   final FlacResult result = FlacResult();
-  late final RandomAccessFile reader;
+  RandomAccessFile? reader;
   late final Buffer bufferedFile;
 
   final output = AccumulatorSink<Digest>();
   late final md5Input = md5.startChunkedConversion(output);
   int totalSamples = 0;
 
-  FlacDecoder({required File track}) {
+  FlacDecoder.fromFile(File track) {
     reader = track.openSync();
-    bufferedFile = Buffer(randomAccessFile: reader);
+    bufferedFile = Buffer(randomAccessFile: reader!);
+  }
+
+  FlacDecoder.fromBytes(Uint8List bytes) {
+    bufferedFile = Buffer.fromBytes(bytes);
+  }
+
+  FlacDecoder.fromChunkSource(NextChunk nextChunk) {
+    bufferedFile = Buffer.fromChunkSource(nextChunk);
+  }
+
+  static Future<FlacDecoder> fromByteStream(
+      Stream<List<int>> byteStream) async {
+    final bytesBuilder = BytesBuilder(copy: false);
+
+    await for (final chunk in byteStream) {
+      bytesBuilder.add(chunk);
+    }
+
+    return FlacDecoder.fromBytes(bytesBuilder.takeBytes());
   }
 
   FlacResult decode() {
@@ -91,7 +111,7 @@ class FlacDecoder {
 
   /// Close the [reader] when the decoding is done
   void close() {
-    reader.closeSync();
+    reader?.closeSync();
   }
 
   /// A Flac file must start with the magic word "fLaC"
