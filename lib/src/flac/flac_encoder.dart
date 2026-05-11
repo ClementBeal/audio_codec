@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:math' as math;
 
 import 'package:audio_codec/src/flac/flac_decoder.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
@@ -36,6 +37,12 @@ class FlacEncoder {
 
   // Maximum fixed predictor order defined by FLAC.
   static const _maxFixedPredictorOrder = 4;
+
+  // Maximum LPC order attempted for generic linear prediction.
+  static const _maxLpcOrder = 8;
+
+  // QLP coefficient precision used for LPC subframes.
+  static const _lpcCoefficientPrecision = 12;
 
   Uint8List encode(List<Samples> samples) {
     final bytes = BytesBuilder(copy: false);
@@ -169,8 +176,14 @@ class FlacEncoder {
         _writeConstantSubframe(subframeWriter, channel.first);
       } else {
         final fixedDecision = _chooseFixedPredictor(channel);
-        if (fixedDecision != null) {
+        final lpcDecision = _chooseLpcPredictor(channel);
+
+        if (fixedDecision != null &&
+            (lpcDecision == null ||
+                fixedDecision.estimatedBits <= lpcDecision.estimatedBits)) {
           _writeFixedSubframe(subframeWriter, channel, fixedDecision);
+        } else if (lpcDecision != null) {
+          _writeLpcSubframe(subframeWriter, channel, lpcDecision);
         } else {
           _writeVerbatimSubframe(subframeWriter, channel);
         }
@@ -227,6 +240,57 @@ class FlacEncoder {
           riceParameter: riceParameter,
           residuals: residuals,
           estimatedBits: estimatedBits,
+        );
+      }
+    }
+
+    return best;
+  }
+
+  _LpcPredictorDecision? _chooseLpcPredictor(Samples channel) {
+    final verbatimBits = 8 + channel.length * _bitsPerSample;
+    _LpcPredictorDecision? best;
+
+    final maxOrder = channel.length - 1 < _maxLpcOrder
+        ? channel.length - 1
+        : _maxLpcOrder;
+
+    for (int order = 1; order <= maxOrder; order++) {
+      final floating = _computeLpcCoefficients(channel, order);
+      if (floating == null) {
+        continue;
+      }
+
+      final quantized = _quantizeLpcCoefficients(
+        floating,
+        _lpcCoefficientPrecision,
+      );
+      if (quantized == null) {
+        continue;
+      }
+
+      final residuals = _computeLpcResiduals(channel, quantized, order);
+      final riceParameter = _chooseRiceParameter(residuals);
+      final estimatedBits = _estimateLpcSubframeBitCount(
+        order,
+        residuals,
+        riceParameter,
+        quantized.precision,
+      );
+
+      if (estimatedBits >= verbatimBits) {
+        continue;
+      }
+
+      if (best == null || estimatedBits < best.estimatedBits) {
+        best = _LpcPredictorDecision(
+          order: order,
+          riceParameter: riceParameter,
+          residuals: residuals,
+          estimatedBits: estimatedBits,
+          qlpPrecision: quantized.precision,
+          shift: quantized.shift,
+          coefficients: quantized.coefficients,
         );
       }
     }
@@ -312,8 +376,31 @@ class FlacEncoder {
     return bits;
   }
 
+  int _estimateLpcSubframeBitCount(
+    int order,
+    List<int> residuals,
+    int riceParameter,
+    int qlpPrecision,
+  ) {
+    // Subframe header + warm-up samples + LPC params + residual header.
+    int bits = 8 + (order * _bitsPerSample) + 4 + 5 + (order * qlpPrecision) + 10;
+
+    for (final residual in residuals) {
+      final folded = _foldResidual(residual);
+      final quotient = folded >> riceParameter;
+      bits += quotient + 1 + riceParameter;
+    }
+
+    return bits;
+  }
+
   int _fixedSubframeHeaderForOrder(int order) {
     final subframeType = 8 + order;
+    return subframeType << 1;
+  }
+
+  int _lpcSubframeHeaderForOrder(int order) {
+    final subframeType = 31 + order;
     return subframeType << 1;
   }
 
@@ -347,28 +434,166 @@ class FlacEncoder {
       writer.writeSigned(channel[i], _bitsPerSample);
     }
 
+    _writeRiceResiduals(writer, decision.residuals, decision.riceParameter);
+  }
+
+  void _writeLpcSubframe(
+    _BitWriter writer,
+    Samples channel,
+    _LpcPredictorDecision decision,
+  ) {
+    writer.writeBits(_lpcSubframeHeaderForOrder(decision.order), 8);
+
+    for (int i = 0; i < decision.order; i++) {
+      writer.writeSigned(channel[i], _bitsPerSample);
+    }
+
+    writer.writeBits(decision.qlpPrecision - 1, 4);
+    writer.writeSigned(decision.shift, 5);
+
+    for (final coefficient in decision.coefficients) {
+      writer.writeSigned(coefficient, decision.qlpPrecision);
+    }
+
+    _writeRiceResiduals(writer, decision.residuals, decision.riceParameter);
+  }
+
+  void _writeRiceResiduals(
+    _BitWriter writer,
+    List<int> residuals,
+    int riceParameter,
+  ) {
     // Residual header:
     // - method 0 => 4-bit Rice parameter
     // - partition order 0 => single partition
     writer.writeBits(0, 2);
     writer.writeBits(0, 4);
-    writer.writeBits(decision.riceParameter, 4);
+    writer.writeBits(riceParameter, 4);
 
-    for (final residual in decision.residuals) {
+    for (final residual in residuals) {
       final folded = _foldResidual(residual);
-      final quotient = folded >> decision.riceParameter;
-      final remainderMask = (1 << decision.riceParameter) - 1;
+      final quotient = folded >> riceParameter;
+      final remainderMask = (1 << riceParameter) - 1;
       final remainder = folded & remainderMask;
 
       writer.writeUnaryZeroCount(quotient);
-      if (decision.riceParameter > 0) {
-        writer.writeBits(remainder, decision.riceParameter);
+      if (riceParameter > 0) {
+        writer.writeBits(remainder, riceParameter);
       }
     }
   }
 
   int _foldResidual(int residual) {
     return residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
+  }
+
+  List<double>? _computeLpcCoefficients(Samples channel, int order) {
+    final r = List<double>.filled(order + 1, 0.0);
+    for (int lag = 0; lag <= order; lag++) {
+      double sum = 0.0;
+      for (int i = lag; i < channel.length; i++) {
+        sum += channel[i] * channel[i - lag];
+      }
+      r[lag] = sum;
+    }
+
+    if (r[0] == 0.0) {
+      return null;
+    }
+
+    final a = List<double>.filled(order + 1, 0.0);
+    double error = r[0];
+    const epsilon = 1e-12;
+
+    for (int i = 1; i <= order; i++) {
+      double lambda = r[i];
+      for (int j = 1; j < i; j++) {
+        lambda -= a[j] * r[i - j];
+      }
+
+      if (error.abs() < epsilon) {
+        return null;
+      }
+
+      lambda /= error;
+
+      final previous = List<double>.from(a);
+      a[i] = lambda;
+      for (int j = 1; j < i; j++) {
+        a[j] = previous[j] - lambda * previous[i - j];
+      }
+
+      error *= (1.0 - lambda * lambda);
+      if (!error.isFinite || error <= epsilon) {
+        return null;
+      }
+    }
+
+    return [for (int i = 1; i <= order; i++) a[i]];
+  }
+
+  _QuantizedLpc? _quantizeLpcCoefficients(
+    List<double> coefficients,
+    int precision,
+  ) {
+    final maxAbs = coefficients.fold<double>(
+      0.0,
+      (current, value) => math.max(current, value.abs()),
+    );
+
+    if (maxAbs == 0.0 || !maxAbs.isFinite) {
+      return null;
+    }
+
+    final qMax = (1 << (precision - 1)) - 1;
+    final qMin = -(1 << (precision - 1));
+
+    final shiftFromMax = (math.log(qMax / maxAbs) / math.ln2).floor();
+    final shift = shiftFromMax.clamp(0, 15);
+    final scale = math.pow(2.0, shift).toDouble();
+
+    final qlp = <int>[];
+    bool hasNonZero = false;
+    for (final coefficient in coefficients) {
+      int quantized = (coefficient * scale).round();
+      if (quantized > qMax) {
+        quantized = qMax;
+      } else if (quantized < qMin) {
+        quantized = qMin;
+      }
+      if (quantized != 0) {
+        hasNonZero = true;
+      }
+      qlp.add(quantized);
+    }
+
+    if (!hasNonZero) {
+      return null;
+    }
+
+    return _QuantizedLpc(
+      precision: precision,
+      shift: shift,
+      coefficients: qlp,
+    );
+  }
+
+  List<int> _computeLpcResiduals(
+    Samples channel,
+    _QuantizedLpc quantized,
+    int order,
+  ) {
+    final residuals = <int>[];
+    for (int i = order; i < channel.length; i++) {
+      int prediction = 0;
+      for (int j = 0; j < order; j++) {
+        prediction += quantized.coefficients[j] * channel[i - 1 - j];
+      }
+      prediction >>= quantized.shift;
+      residuals.add(channel[i] - prediction);
+    }
+
+    return residuals;
   }
 
   /// Writes a FLAC `verbatim` subframe for one channel.
@@ -480,6 +705,38 @@ class _FixedPredictorDecision {
     required this.riceParameter,
     required this.residuals,
     required this.estimatedBits,
+  });
+}
+
+class _LpcPredictorDecision {
+  final int order;
+  final int riceParameter;
+  final List<int> residuals;
+  final int estimatedBits;
+  final int qlpPrecision;
+  final int shift;
+  final List<int> coefficients;
+
+  const _LpcPredictorDecision({
+    required this.order,
+    required this.riceParameter,
+    required this.residuals,
+    required this.estimatedBits,
+    required this.qlpPrecision,
+    required this.shift,
+    required this.coefficients,
+  });
+}
+
+class _QuantizedLpc {
+  final int precision;
+  final int shift;
+  final List<int> coefficients;
+
+  const _QuantizedLpc({
+    required this.precision,
+    required this.shift,
+    required this.coefficients,
   });
 }
 
