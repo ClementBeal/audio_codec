@@ -2,7 +2,26 @@ import 'dart:typed_data';
 import 'dart:math' as math;
 
 import 'package:audio_codec/src/flac/flac_decoder.dart';
+import 'package:audio_codec/src/utils/bit_writer.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
+
+class FlacEncoderConfig {
+  final int frameBlockSize;
+  final int sampleRate;
+  final int bitsPerSample;
+  final int maxFixedPredictorOrder;
+  final int maxLpcOrder;
+  final int lpcCoefficientPrecision;
+
+  const FlacEncoderConfig({
+    this.frameBlockSize = 4096,
+    this.sampleRate = 44100,
+    this.bitsPerSample = 16,
+    this.maxFixedPredictorOrder = 4,
+    this.maxLpcOrder = 8,
+    this.lpcCoefficientPrecision = 12,
+  });
+}
 
 class FlacEncoder {
   // Mandatory FLAC stream signature: first 4 bytes of the file.
@@ -10,15 +29,6 @@ class FlacEncoder {
 
   // Fixed STREAMINFO payload length in FLAC (always 34 bytes).
   static const _streamInfoBlockLength = 34;
-
-  // Number of inter-channel samples targeted per frame.
-  static const _frameBlockSize = 4096;
-
-  // Stream sample rate currently emitted by this encoder.
-  static const _sampleRate = 44100;
-
-  // Stream bit depth currently emitted by this encoder.
-  static const _bitsPerSample = 16;
 
   // Frame header block-size code: read 16-bit (blocksize - 1) after coded number.
   static const _frameBlockSizeCode = 0x7;
@@ -35,42 +45,52 @@ class FlacEncoder {
   // Subframe header byte for verbatim samples (no wasted bits).
   static const _verbatimSubframeHeader = 0x02;
 
-  // Maximum fixed predictor order defined by FLAC.
-  static const _maxFixedPredictorOrder = 4;
+  FlacEncoderConfig? _activeConfig;
 
-  // Maximum LPC order attempted for generic linear prediction.
-  static const _maxLpcOrder = 8;
-
-  // QLP coefficient precision used for LPC subframes.
-  static const _lpcCoefficientPrecision = 12;
-
-  Uint8List encode(List<Samples> samples) {
-    final bytes = BytesBuilder(copy: false);
-    bytes.add(_flacMagicWord);
-    _writeStreamInfoBlock(bytes, samples);
-
-    final totalSamples = samples.first.length;
-    int frameNumber = 0;
-
-    for (int start = 0; start < totalSamples; start += _frameBlockSize) {
-      // End index (exclusive) of the current frame window, clamped to
-      // totalSamples for the last partial frame.
-      final endExclusive = (start + _frameBlockSize < totalSamples)
-          ? start + _frameBlockSize
-          : totalSamples;
-
-      // Per-channel PCM chunk for this frame: each entry is one channel
-      // restricted to [start, endExclusive).
-      final frameChannels = <Samples>[
-        for (final channel in samples)
-          Int32List.fromList(channel.sublist(start, endExclusive)),
-      ];
-
-      bytes.add(_encode(frameChannels, frameNumber));
-      frameNumber++;
+  FlacEncoderConfig get _config {
+    final config = _activeConfig;
+    if (config == null) {
+      throw StateError('Encoder config is not set.');
     }
+    return config;
+  }
 
-    return bytes.toBytes();
+  Uint8List encode(
+    List<Samples> samples, {
+    required FlacEncoderConfig config,
+  }) {
+    _activeConfig = config;
+    try {
+      final bytes = BytesBuilder(copy: false);
+      bytes.add(_flacMagicWord);
+      _writeStreamInfoBlock(bytes, samples);
+
+      final totalSamples = samples.first.length;
+      int frameNumber = 0;
+      final frameBlockSize = _config.frameBlockSize;
+
+      for (int start = 0; start < totalSamples; start += frameBlockSize) {
+        // End index (exclusive) of the current frame window, clamped to
+        // totalSamples for the last partial frame.
+        final endExclusive = (start + frameBlockSize < totalSamples)
+            ? start + frameBlockSize
+            : totalSamples;
+
+        // Per-channel PCM chunk for this frame: each entry is one channel
+        // restricted to [start, endExclusive).
+        final frameChannels = <Samples>[
+          for (final channel in samples)
+            Int32List.fromList(channel.sublist(start, endExclusive)),
+        ];
+
+        bytes.add(_encode(frameChannels, frameNumber));
+        frameNumber++;
+      }
+
+      return bytes.toBytes();
+    } finally {
+      _activeConfig = null;
+    }
   }
 
   /// Writes the first FLAC metadata block (`STREAMINFO`).
@@ -105,22 +125,24 @@ class FlacEncoder {
     final streamInfoView = ByteData.sublistView(streamInfo);
 
     // Target block size declared in STREAMINFO.
-    streamInfoView.setUint16(0, _frameBlockSize, Endian.big); // min block size
-    streamInfoView.setUint16(2, _frameBlockSize, Endian.big); // max block size
+    streamInfoView.setUint16(
+        0, _config.frameBlockSize, Endian.big); // min block size
+    streamInfoView.setUint16(
+        2, _config.frameBlockSize, Endian.big); // max block size
 
     // Sample rate declared in STREAMINFO.
     // FLAC stores "channels - 1" in a 3-bit field.
     final channelsMinusOne = samples.length - 1;
 
     // FLAC stores "bitsPerSample - 1" in a 5-bit field.
-    const bitsPerSampleMinusOne = _bitsPerSample - 1;
+    final bitsPerSampleMinusOne = _config.bitsPerSample - 1;
 
     // Total number of inter-channel samples declared in the stream.
     final totalSamples = samples.first.length;
 
     // STREAMINFO 64-bit packed field:
     // [sampleRate:20][channels-1:3][bitsPerSample-1:5][totalSamples:36]
-    final packed = (_sampleRate << 44) |
+    final packed = (_config.sampleRate << 44) |
         (channelsMinusOne << 41) |
         (bitsPerSampleMinusOne << 36) |
         totalSamples;
@@ -165,7 +187,7 @@ class FlacEncoder {
     frame.add(headerBytes);
     frame.addByte(headerCrc);
 
-    final subframeWriter = _BitWriter(frame);
+    final subframeWriter = BitWriter(frame);
 
     // One subframe per channel:
     // - constant if all samples in the channel chunk are identical
@@ -217,11 +239,11 @@ class FlacEncoder {
   }
 
   _FixedPredictorDecision? _chooseFixedPredictor(Samples channel) {
-    final verbatimBits = 8 + channel.length * _bitsPerSample;
+    final verbatimBits = 8 + channel.length * _config.bitsPerSample;
     _FixedPredictorDecision? best;
 
-    final maxOrder = channel.length > _maxFixedPredictorOrder
-        ? _maxFixedPredictorOrder
+    final maxOrder = channel.length > _config.maxFixedPredictorOrder
+        ? _config.maxFixedPredictorOrder
         : channel.length;
 
     for (int order = 0; order <= maxOrder; order++) {
@@ -248,12 +270,12 @@ class FlacEncoder {
   }
 
   _LpcPredictorDecision? _chooseLpcPredictor(Samples channel) {
-    final verbatimBits = 8 + channel.length * _bitsPerSample;
+    final verbatimBits = 8 + channel.length * _config.bitsPerSample;
     _LpcPredictorDecision? best;
 
-    final maxOrder = channel.length - 1 < _maxLpcOrder
+    final maxOrder = channel.length - 1 < _config.maxLpcOrder
         ? channel.length - 1
-        : _maxLpcOrder;
+        : _config.maxLpcOrder;
 
     for (int order = 1; order <= maxOrder; order++) {
       final floating = _computeLpcCoefficients(channel, order);
@@ -263,7 +285,7 @@ class FlacEncoder {
 
       final quantized = _quantizeLpcCoefficients(
         floating,
-        _lpcCoefficientPrecision,
+        _config.lpcCoefficientPrecision,
       );
       if (quantized == null) {
         continue;
@@ -365,7 +387,7 @@ class FlacEncoder {
     int riceParameter,
   ) {
     // Subframe header + warm-up samples + residual header.
-    int bits = 8 + (order * _bitsPerSample) + 10;
+    int bits = 8 + (order * _config.bitsPerSample) + 10;
 
     for (final residual in residuals) {
       final folded = _foldResidual(residual);
@@ -383,7 +405,12 @@ class FlacEncoder {
     int qlpPrecision,
   ) {
     // Subframe header + warm-up samples + LPC params + residual header.
-    int bits = 8 + (order * _bitsPerSample) + 4 + 5 + (order * qlpPrecision) + 10;
+    int bits = 8 +
+        (order * _config.bitsPerSample) +
+        4 +
+        5 +
+        (order * qlpPrecision) +
+        10;
 
     for (final residual in residuals) {
       final folded = _foldResidual(residual);
@@ -412,9 +439,9 @@ class FlacEncoder {
   ///
   /// With the current 16-bit encoder configuration, this value is written
   /// on 2 bytes in big-endian order.
-  void _writeConstantSubframe(_BitWriter writer, int sampleValue) {
+  void _writeConstantSubframe(BitWriter writer, int sampleValue) {
     writer.writeBits(_constantSubframeHeader, 8);
-    writer.writeSigned(sampleValue, _bitsPerSample);
+    writer.writeSigned(sampleValue, _config.bitsPerSample);
   }
 
   /// Writes a FLAC `fixed predictor` subframe.
@@ -424,28 +451,28 @@ class FlacEncoder {
   /// - warm-up samples (`order` values)
   /// - residual coded with partitioned Rice method 0 and partition order 0
   void _writeFixedSubframe(
-    _BitWriter writer,
+    BitWriter writer,
     Samples channel,
     _FixedPredictorDecision decision,
   ) {
     writer.writeBits(_fixedSubframeHeaderForOrder(decision.order), 8);
 
     for (int i = 0; i < decision.order; i++) {
-      writer.writeSigned(channel[i], _bitsPerSample);
+      writer.writeSigned(channel[i], _config.bitsPerSample);
     }
 
     _writeRiceResiduals(writer, decision.residuals, decision.riceParameter);
   }
 
   void _writeLpcSubframe(
-    _BitWriter writer,
+    BitWriter writer,
     Samples channel,
     _LpcPredictorDecision decision,
   ) {
     writer.writeBits(_lpcSubframeHeaderForOrder(decision.order), 8);
 
     for (int i = 0; i < decision.order; i++) {
-      writer.writeSigned(channel[i], _bitsPerSample);
+      writer.writeSigned(channel[i], _config.bitsPerSample);
     }
 
     writer.writeBits(decision.qlpPrecision - 1, 4);
@@ -459,7 +486,7 @@ class FlacEncoder {
   }
 
   void _writeRiceResiduals(
-    _BitWriter writer,
+    BitWriter writer,
     List<int> residuals,
     int riceParameter,
   ) {
@@ -603,12 +630,12 @@ class FlacEncoder {
   /// - all channel samples written directly, without prediction/residual coding
   ///
   /// Each sample is currently encoded as signed 16-bit big-endian.
-  void _writeVerbatimSubframe(_BitWriter writer, Samples channel) {
+  void _writeVerbatimSubframe(BitWriter writer, Samples channel) {
     writer.writeBits(_verbatimSubframeHeader, 8);
 
     // Write each sample as signed big-endian 16-bit.
     for (final sample in channel) {
-      writer.writeSigned(sample, _bitsPerSample);
+      writer.writeSigned(sample, _config.bitsPerSample);
     }
   }
 
@@ -738,48 +765,4 @@ class _QuantizedLpc {
     required this.shift,
     required this.coefficients,
   });
-}
-
-class _BitWriter {
-  final BytesBuilder _bytes;
-  int _currentByte = 0;
-  int _nextBitIndex = 7;
-
-  _BitWriter(this._bytes);
-
-  void writeBits(int value, int bitCount) {
-    for (int i = bitCount - 1; i >= 0; i--) {
-      final bit = (value >> i) & 0x1;
-      _currentByte |= bit << _nextBitIndex;
-      _nextBitIndex--;
-
-      if (_nextBitIndex < 0) {
-        _bytes.addByte(_currentByte & 0xFF);
-        _currentByte = 0;
-        _nextBitIndex = 7;
-      }
-    }
-  }
-
-  void writeSigned(int value, int bitCount) {
-    final mask = (1 << bitCount) - 1;
-    writeBits(value & mask, bitCount);
-  }
-
-  void writeUnaryZeroCount(int zeroCount) {
-    for (int i = 0; i < zeroCount; i++) {
-      writeBits(0, 1);
-    }
-    writeBits(1, 1);
-  }
-
-  void alignToByte() {
-    if (_nextBitIndex == 7) {
-      return;
-    }
-
-    _bytes.addByte(_currentByte & 0xFF);
-    _currentByte = 0;
-    _nextBitIndex = 7;
-  }
 }
