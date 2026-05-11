@@ -34,8 +34,8 @@ class FlacEncoder {
   // Subframe header byte for verbatim samples (no wasted bits).
   static const _verbatimSubframeHeader = 0x02;
 
-  // Maximum polynomial predictor order attempted before falling back to verbatim.
-  static const _maxPolynomialOrder = 5;
+  // Maximum fixed predictor order defined by FLAC.
+  static const _maxFixedPredictorOrder = 4;
 
   Uint8List encode(List<Samples> samples) {
     final bytes = BytesBuilder(copy: false);
@@ -162,15 +162,15 @@ class FlacEncoder {
 
     // One subframe per channel:
     // - constant if all samples in the channel chunk are identical
-    // - polynomial predictor (up to order 5) if it matches exactly
+    // - fixed predictor + Rice residuals if profitable
     // - verbatim otherwise
     for (final channel in samples) {
       if (_isConstantChannel(channel)) {
         _writeConstantSubframe(subframeWriter, channel.first);
       } else {
-        final predictor = _findPolynomialPredictor(channel);
-        if (predictor != null) {
-          _writePolynomialSubframe(subframeWriter, channel, predictor);
+        final fixedDecision = _chooseFixedPredictor(channel);
+        if (fixedDecision != null) {
+          _writeFixedSubframe(subframeWriter, channel, fixedDecision);
         } else {
           _writeVerbatimSubframe(subframeWriter, channel);
         }
@@ -203,55 +203,117 @@ class FlacEncoder {
     return true;
   }
 
-  _PolynomialPredictor? _findPolynomialPredictor(Samples channel) {
-    for (int order = 2; order <= _maxPolynomialOrder; order++) {
-      if (channel.length < order) {
+  _FixedPredictorDecision? _chooseFixedPredictor(Samples channel) {
+    final verbatimBits = 8 + channel.length * _bitsPerSample;
+    _FixedPredictorDecision? best;
+
+    final maxOrder = channel.length > _maxFixedPredictorOrder
+        ? _maxFixedPredictorOrder
+        : channel.length;
+
+    for (int order = 0; order <= maxOrder; order++) {
+      final residuals = _computeFixedResiduals(channel, order);
+      final riceParameter = _chooseRiceParameter(residuals);
+      final estimatedBits =
+          _estimateFixedSubframeBitCount(order, residuals, riceParameter);
+
+      if (estimatedBits >= verbatimBits) {
         continue;
       }
 
-      final coefficients = _coefficientsForOrder(order);
-      if (coefficients == null) {
-        continue;
-      }
-
-      if (_matchesPredictor(channel, coefficients)) {
-        return _PolynomialPredictor(order: order, coefficients: coefficients);
+      if (best == null || estimatedBits < best.estimatedBits) {
+        best = _FixedPredictorDecision(
+          order: order,
+          riceParameter: riceParameter,
+          residuals: residuals,
+          estimatedBits: estimatedBits,
+        );
       }
     }
 
-    return null;
+    return best;
   }
 
-  List<int>? _coefficientsForOrder(int order) {
-    return switch (order) {
-      2 => const [2, -1],
-      3 => const [3, -3, 1],
-      4 => const [4, -6, 4, -1],
-      5 => const [5, -10, 10, -5, 1],
-      _ => null,
-    };
-  }
+  List<int> _computeFixedResiduals(Samples channel, int order) {
+    final residuals = <int>[];
 
-  bool _matchesPredictor(Samples channel, List<int> coefficients) {
-    final order = coefficients.length;
     for (int i = order; i < channel.length; i++) {
-      int predicted = 0;
-      for (int j = 0; j < order; j++) {
-        predicted += coefficients[j] * channel[i - 1 - j];
+      final sample = channel[i];
+      int prediction;
+
+      switch (order) {
+        case 0:
+          prediction = 0;
+          break;
+        case 1:
+          prediction = channel[i - 1];
+          break;
+        case 2:
+          prediction = 2 * channel[i - 1] - channel[i - 2];
+          break;
+        case 3:
+          prediction = 3 * channel[i - 1] - 3 * channel[i - 2] + channel[i - 3];
+          break;
+        case 4:
+          prediction = 4 * channel[i - 1] -
+              6 * channel[i - 2] +
+              4 * channel[i - 3] -
+              channel[i - 4];
+          break;
+        default:
+          throw ArgumentError.value(order, 'order', 'unsupported fixed order');
       }
 
-      if (predicted != channel[i]) {
-        return false;
+      residuals.add(sample - prediction);
+    }
+
+    return residuals;
+  }
+
+  int _chooseRiceParameter(List<int> residuals) {
+    if (residuals.isEmpty) {
+      return 0;
+    }
+
+    int bestParameter = 0;
+    int bestBits = 1 << 30;
+
+    for (int parameter = 0; parameter <= 14; parameter++) {
+      int bits = 0;
+      for (final residual in residuals) {
+        final folded = _foldResidual(residual);
+        final quotient = folded >> parameter;
+        bits += quotient + 1 + parameter;
+      }
+
+      if (bits < bestBits) {
+        bestBits = bits;
+        bestParameter = parameter;
       }
     }
 
-    return true;
+    return bestParameter;
   }
 
-  int _lpcSubframeHeaderForOrder(int order) {
-    // Decoder maps subframeType back to order with: order = subframeType - 31.
-    // So we encode subframeType as order + 31, then place it in the 6-bit slot.
-    final subframeType = order + 31;
+  int _estimateFixedSubframeBitCount(
+    int order,
+    List<int> residuals,
+    int riceParameter,
+  ) {
+    // Subframe header + warm-up samples + residual header.
+    int bits = 8 + (order * _bitsPerSample) + 10;
+
+    for (final residual in residuals) {
+      final folded = _foldResidual(residual);
+      final quotient = folded >> riceParameter;
+      bits += quotient + 1 + riceParameter;
+    }
+
+    return bits;
+  }
+
+  int _fixedSubframeHeaderForOrder(int order) {
+    final subframeType = 8 + order;
     return subframeType << 1;
   }
 
@@ -268,47 +330,45 @@ class FlacEncoder {
     writer.writeSigned(sampleValue, _bitsPerSample);
   }
 
-  /// Writes a FLAC `polynomial` subframe using LPC coding.
+  /// Writes a FLAC `fixed predictor` subframe.
   ///
-  /// This is used when a channel matches a deterministic polynomial predictor
-  /// (order 2..5 in this encoder). We encode:
-  /// - LPC subframe header
+  /// The layout is:
+  /// - fixed subframe header (order 0..4)
   /// - warm-up samples (`order` values)
-  /// - LPC precision / shift / coefficients
-  /// - residual coding configured as "escaped with 0-bit width", which means
-  ///   all residuals are implicitly zero.
-  void _writePolynomialSubframe(
+  /// - residual coded with partitioned Rice method 0 and partition order 0
+  void _writeFixedSubframe(
     _BitWriter writer,
     Samples channel,
-    _PolynomialPredictor predictor,
+    _FixedPredictorDecision decision,
   ) {
-    writer.writeBits(_lpcSubframeHeaderForOrder(predictor.order), 8);
+    writer.writeBits(_fixedSubframeHeaderForOrder(decision.order), 8);
 
-    for (int i = 0; i < predictor.order; i++) {
+    for (int i = 0; i < decision.order; i++) {
       writer.writeSigned(channel[i], _bitsPerSample);
     }
 
-    const coefficientPrecisionMinusOne = 15;
-    const rightShiftNeeded = 0;
-
-    writer.writeBits(coefficientPrecisionMinusOne, 4);
-    writer.writeSigned(rightShiftNeeded, 5);
-
-    for (final coefficient in predictor.coefficients) {
-      writer.writeSigned(coefficient, coefficientPrecisionMinusOne + 1);
-    }
-
-    // Residual coding:
-    // - Rice coding method 0 (2 bits)
-    // - partition order 0 (4 bits)
-    // - escaped parameter 15 on 4 bits
-    // - escaped residual bit width 0 on 5 bits
-    //
-    // With escaped width 0, decoder yields zero residual for every element.
+    // Residual header:
+    // - method 0 => 4-bit Rice parameter
+    // - partition order 0 => single partition
     writer.writeBits(0, 2);
     writer.writeBits(0, 4);
-    writer.writeBits(15, 4);
-    writer.writeBits(0, 5);
+    writer.writeBits(decision.riceParameter, 4);
+
+    for (final residual in decision.residuals) {
+      final folded = _foldResidual(residual);
+      final quotient = folded >> decision.riceParameter;
+      final remainderMask = (1 << decision.riceParameter) - 1;
+      final remainder = folded & remainderMask;
+
+      writer.writeUnaryZeroCount(quotient);
+      if (decision.riceParameter > 0) {
+        writer.writeBits(remainder, decision.riceParameter);
+      }
+    }
+  }
+
+  int _foldResidual(int residual) {
+    return residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
   }
 
   /// Writes a FLAC `verbatim` subframe for one channel.
@@ -409,13 +469,17 @@ class FlacEncoder {
   }
 }
 
-class _PolynomialPredictor {
+class _FixedPredictorDecision {
   final int order;
-  final List<int> coefficients;
+  final int riceParameter;
+  final List<int> residuals;
+  final int estimatedBits;
 
-  const _PolynomialPredictor({
+  const _FixedPredictorDecision({
     required this.order,
-    required this.coefficients,
+    required this.riceParameter,
+    required this.residuals,
+    required this.estimatedBits,
   });
 }
 
@@ -443,6 +507,13 @@ class _BitWriter {
   void writeSigned(int value, int bitCount) {
     final mask = (1 << bitCount) - 1;
     writeBits(value & mask, bitCount);
+  }
+
+  void writeUnaryZeroCount(int zeroCount) {
+    for (int i = 0; i < zeroCount; i++) {
+      writeBits(0, 1);
+    }
+    writeBits(1, 1);
   }
 
   void alignToByte() {
