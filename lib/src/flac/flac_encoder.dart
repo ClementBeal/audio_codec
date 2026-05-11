@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:audio_codec/src/flac/flac_decoder.dart';
 import 'package:audio_codec/src/utils/bit_writer.dart';
+import 'package:audio_codec/src/utils/crc/crc16.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
 
 class FlacEncoderConfig {
@@ -216,7 +217,7 @@ class FlacEncoder {
     subframeWriter.alignToByte();
 
     final frameBytesWithoutCrc16 = frame.toBytes();
-    final frameCrc16 = _calculateCrc16(frameBytesWithoutCrc16);
+    final frameCrc16 = calculateCRC16(frameBytesWithoutCrc16);
     frame.addByte((frameCrc16 >> 8) & 0xFF);
     frame.addByte(frameCrc16 & 0xFF);
 
@@ -707,25 +708,6 @@ class FlacEncoder {
         leadingPrefix[continuationBytes] | (remaining & firstPayloadMask);
 
     return bytes;
-  }
-
-  /// Frame footer CRC-16 with polynomial x^16 + x^15 + x^2 + x^0.
-  int _calculateCrc16(List<int> data) {
-    int crc = 0;
-    const polynomial = 0x8005;
-
-    for (final byte in data) {
-      crc ^= (byte << 8);
-      for (int i = 0; i < 8; i++) {
-        if ((crc & 0x8000) != 0) {
-          crc = ((crc << 1) ^ polynomial) & 0xFFFF;
-        } else {
-          crc = (crc << 1) & 0xFFFF;
-        }
-      }
-    }
-
-    return crc;
   }
 }
 
