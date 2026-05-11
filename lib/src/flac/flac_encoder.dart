@@ -248,9 +248,10 @@ class FlacEncoder {
 
     for (int order = 0; order <= maxOrder; order++) {
       final residuals = _computeFixedResiduals(channel, order);
-      final riceParameter = _chooseRiceParameter(residuals);
+      final foldedResiduals = _foldResiduals(residuals);
+      final riceParameter = _chooseRiceParameter(foldedResiduals);
       final estimatedBits =
-          _estimateFixedSubframeBitCount(order, residuals, riceParameter);
+          _estimateFixedSubframeBitCount(order, foldedResiduals, riceParameter);
 
       if (estimatedBits >= verbatimBits) {
         continue;
@@ -292,10 +293,11 @@ class FlacEncoder {
       }
 
       final residuals = _computeLpcResiduals(channel, quantized, order);
-      final riceParameter = _chooseRiceParameter(residuals);
+      final foldedResiduals = _foldResiduals(residuals);
+      final riceParameter = _chooseRiceParameter(foldedResiduals);
       final estimatedBits = _estimateLpcSubframeBitCount(
         order,
-        residuals,
+        foldedResiduals,
         riceParameter,
         quantized.precision,
       );
@@ -356,8 +358,8 @@ class FlacEncoder {
     return residuals;
   }
 
-  int _chooseRiceParameter(List<int> residuals) {
-    if (residuals.isEmpty) {
+  int _chooseRiceParameter(List<int> foldedResiduals) {
+    if (foldedResiduals.isEmpty) {
       return 0;
     }
 
@@ -366,8 +368,7 @@ class FlacEncoder {
 
     for (int parameter = 0; parameter <= 14; parameter++) {
       int bits = 0;
-      for (final residual in residuals) {
-        final folded = _foldResidual(residual);
+      for (final folded in foldedResiduals) {
         final quotient = folded >> parameter;
         bits += quotient + 1 + parameter;
       }
@@ -383,14 +384,13 @@ class FlacEncoder {
 
   int _estimateFixedSubframeBitCount(
     int order,
-    List<int> residuals,
+    List<int> foldedResiduals,
     int riceParameter,
   ) {
     // Subframe header + warm-up samples + residual header.
     int bits = 8 + (order * _config.bitsPerSample) + 10;
 
-    for (final residual in residuals) {
-      final folded = _foldResidual(residual);
+    for (final folded in foldedResiduals) {
       final quotient = folded >> riceParameter;
       bits += quotient + 1 + riceParameter;
     }
@@ -400,7 +400,7 @@ class FlacEncoder {
 
   int _estimateLpcSubframeBitCount(
     int order,
-    List<int> residuals,
+    List<int> foldedResiduals,
     int riceParameter,
     int qlpPrecision,
   ) {
@@ -412,8 +412,7 @@ class FlacEncoder {
         (order * qlpPrecision) +
         10;
 
-    for (final residual in residuals) {
-      final folded = _foldResidual(residual);
+    for (final folded in foldedResiduals) {
       final quotient = folded >> riceParameter;
       bits += quotient + 1 + riceParameter;
     }
@@ -512,6 +511,15 @@ class FlacEncoder {
 
   int _foldResidual(int residual) {
     return residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
+  }
+
+  List<int> _foldResiduals(List<int> residuals) {
+    final foldedResiduals =
+        List<int>.filled(residuals.length, 0, growable: false);
+    for (int i = 0; i < residuals.length; i++) {
+      foldedResiduals[i] = _foldResidual(residuals[i]);
+    }
+    return foldedResiduals;
   }
 
   List<double>? _computeLpcCoefficients(Samples channel, int order) {
