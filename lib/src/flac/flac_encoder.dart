@@ -102,7 +102,7 @@ class FlacEncoder {
       final frameTasks = _buildFrameTasks(
         samples,
         config,
-        copyChannels: true,
+        copyChannels: false,
       );
 
       if (frameTasks.isEmpty) {
@@ -115,33 +115,39 @@ class FlacEncoder {
           bytes.add(_encodeFrameTask(task));
         }
       } else {
+        final transferableTasks = _buildTransferableFrameTasks(frameTasks);
         final workerCount = math.min(parallelism, frameTasks.length);
         final indexedChunks = List.generate(
           workerCount,
-          (_) => <_IndexedFrameEncodeTask>[],
+          (_) => <_IndexedTransferableFrameEncodeTask>[],
           growable: false,
         );
-        for (int i = 0; i < frameTasks.length; i++) {
+        for (int i = 0; i < transferableTasks.length; i++) {
           indexedChunks[i % workerCount].add(
-            _IndexedFrameEncodeTask(
+            _IndexedTransferableFrameEncodeTask(
               frameIndex: i,
-              task: frameTasks[i],
+              task: transferableTasks[i],
             ),
           );
         }
 
-        final encodedChunks = await Future.wait([
-          for (int i = 0; i < workerCount; i++)
+        final encodedChunkFutures = <Future<List<_IndexedTransferableEncodedFrame>>>[];
+        for (int i = 0; i < workerCount; i++) {
+          final chunk = indexedChunks[i];
+          encodedChunkFutures.add(
             Isolate.run(
-              () => _encodeFrameChunk(indexedChunks[i]),
+              () => _encodeTransferableFrameChunk(chunk),
               debugName: 'flac-encode-worker-$i',
             ),
-        ]);
+          );
+        }
+        final encodedChunks = await Future.wait(encodedChunkFutures);
 
         final encodedFrames = List<Uint8List?>.filled(frameTasks.length, null);
         for (final chunk in encodedChunks) {
           for (final encoded in chunk) {
-            encodedFrames[encoded.frameIndex] = encoded.bytes;
+            encodedFrames[encoded.frameIndex] =
+                encoded.bytes.materialize().asUint8List();
           }
         }
 
@@ -207,6 +213,22 @@ class FlacEncoder {
     }
 
     return tasks;
+  }
+
+  List<_TransferableFrameEncodeTask> _buildTransferableFrameTasks(
+    List<_FrameEncodeTask> frameTasks,
+  ) {
+    return [
+      for (final task in frameTasks)
+        _TransferableFrameEncodeTask(
+          config: task.config,
+          frameNumber: task.frameNumber,
+          channels: [
+            for (final channel in task.channels)
+              TransferableTypedData.fromList([channel]),
+          ],
+        ),
+    ];
   }
 
   /// Writes the first FLAC metadata block (`STREAMINFO`).
@@ -913,32 +935,51 @@ Uint8List _encodeFrameTask(_FrameEncodeTask task) {
   }
 }
 
-List<_IndexedEncodedFrame> _encodeFrameChunk(
-    List<_IndexedFrameEncodeTask> chunk) {
+List<_IndexedTransferableEncodedFrame> _encodeTransferableFrameChunk(
+  List<_IndexedTransferableFrameEncodeTask> chunk,
+) {
   return [
     for (final indexedTask in chunk)
-      _IndexedEncodedFrame(
+      _IndexedTransferableEncodedFrame(
         frameIndex: indexedTask.frameIndex,
-        bytes: _encodeFrameTask(indexedTask.task),
+        bytes: _encodeTransferableFrameTask(indexedTask.task),
       ),
   ];
 }
 
-class _IndexedFrameEncodeTask {
-  final int frameIndex;
-  final _FrameEncodeTask task;
+TransferableTypedData _encodeTransferableFrameTask(
+  _TransferableFrameEncodeTask task,
+) {
+  final channels = <Samples>[
+    for (final channel in task.channels)
+      Int32List.view(channel.materialize()),
+  ];
 
-  const _IndexedFrameEncodeTask({
+  final encoder = FlacEncoder();
+  encoder._activeConfig = task.config;
+  try {
+    final encoded = encoder._encode(channels, task.frameNumber);
+    return TransferableTypedData.fromList([encoded]);
+  } finally {
+    encoder._activeConfig = null;
+  }
+}
+
+class _IndexedTransferableFrameEncodeTask {
+  final int frameIndex;
+  final _TransferableFrameEncodeTask task;
+
+  const _IndexedTransferableFrameEncodeTask({
     required this.frameIndex,
     required this.task,
   });
 }
 
-class _IndexedEncodedFrame {
+class _IndexedTransferableEncodedFrame {
   final int frameIndex;
-  final Uint8List bytes;
+  final TransferableTypedData bytes;
 
-  const _IndexedEncodedFrame({
+  const _IndexedTransferableEncodedFrame({
     required this.frameIndex,
     required this.bytes,
   });
@@ -950,6 +991,18 @@ class _FrameEncodeTask {
   final List<Samples> channels;
 
   const _FrameEncodeTask({
+    required this.config,
+    required this.frameNumber,
+    required this.channels,
+  });
+}
+
+class _TransferableFrameEncodeTask {
+  final FlacEncoderConfig config;
+  final int frameNumber;
+  final List<TransferableTypedData> channels;
+
+  const _TransferableFrameEncodeTask({
     required this.config,
     required this.frameNumber,
     required this.channels,
