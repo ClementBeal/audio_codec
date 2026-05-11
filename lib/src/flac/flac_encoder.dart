@@ -364,16 +364,28 @@ class FlacEncoder {
       return 0;
     }
 
-    int bestParameter = 0;
-    int bestBits = 1 << 30;
+    int sumAbs = 0;
+    for (final folded in foldedResiduals) {
+      sumAbs += (folded + 1) >> 1;
+    }
 
-    for (int parameter = 0; parameter <= 14; parameter++) {
-      int bits = 0;
-      for (final folded in foldedResiduals) {
-        final quotient = folded >> parameter;
-        bits += quotient + 1 + parameter;
+    final meanAbs = sumAbs / foldedResiduals.length;
+    final estimated = meanAbs <= 0
+        ? 0
+        : (math.log(meanAbs * math.ln2) / math.ln2).round().clamp(0, 14);
+
+    final candidateMin = estimated > 0 ? estimated - 1 : 0;
+    final candidateMax = estimated < 14 ? estimated + 1 : 14;
+
+    int bestParameter = estimated;
+    int bestBits = _estimateRiceBitsForParameter(foldedResiduals, estimated);
+
+    for (int parameter = candidateMin; parameter <= candidateMax; parameter++) {
+      if (parameter == estimated) {
+        continue;
       }
 
+      final bits = _estimateRiceBitsForParameter(foldedResiduals, parameter);
       if (bits < bestBits) {
         bestBits = bits;
         bestParameter = parameter;
@@ -381,6 +393,15 @@ class FlacEncoder {
     }
 
     return bestParameter;
+  }
+
+  int _estimateRiceBitsForParameter(List<int> foldedResiduals, int parameter) {
+    int bits = 0;
+    for (final folded in foldedResiduals) {
+      final quotient = folded >> parameter;
+      bits += quotient + 1 + parameter;
+    }
+    return bits;
   }
 
   int _estimateFixedSubframeBitCount(
