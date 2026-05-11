@@ -54,6 +54,8 @@ class FlacEncoder {
   FlacEncoderConfig? _activeConfig;
   Int32List _residualScratch = Int32List(0);
   Int32List _foldedResidualScratch = Int32List(0);
+  _FlacWorkerPool? _workerPool;
+  int _workerPoolSize = 0;
 
   FlacEncoderConfig get _config {
     final config = _activeConfig;
@@ -116,39 +118,13 @@ class FlacEncoder {
         }
       } else {
         final transferableTasks = _buildTransferableFrameTasks(frameTasks);
-        final workerCount = math.min(parallelism, frameTasks.length);
-        final indexedChunks = List.generate(
-          workerCount,
-          (_) => <_IndexedTransferableFrameEncodeTask>[],
-          growable: false,
-        );
-        for (int i = 0; i < transferableTasks.length; i++) {
-          indexedChunks[i % workerCount].add(
-            _IndexedTransferableFrameEncodeTask(
-              frameIndex: i,
-              task: transferableTasks[i],
-            ),
-          );
-        }
-
-        final encodedChunkFutures = <Future<List<_IndexedTransferableEncodedFrame>>>[];
-        for (int i = 0; i < workerCount; i++) {
-          final chunk = indexedChunks[i];
-          encodedChunkFutures.add(
-            Isolate.run(
-              () => _encodeTransferableFrameChunk(chunk),
-              debugName: 'flac-encode-worker-$i',
-            ),
-          );
-        }
-        final encodedChunks = await Future.wait(encodedChunkFutures);
+        final workerPool = await _getOrCreateWorkerPool(parallelism);
+        final encodedChunks = await workerPool.encodeTasks(transferableTasks);
 
         final encodedFrames = List<Uint8List?>.filled(frameTasks.length, null);
-        for (final chunk in encodedChunks) {
-          for (final encoded in chunk) {
-            encodedFrames[encoded.frameIndex] =
-                encoded.bytes.materialize().asUint8List();
-          }
+        for (final encoded in encodedChunks) {
+          encodedFrames[encoded.frameIndex] =
+              encoded.bytes.materialize().asUint8List();
         }
 
         for (int i = 0; i < frameTasks.length; i++) {
@@ -166,6 +142,15 @@ class FlacEncoder {
     }
   }
 
+  Future<void> close() async {
+    final workerPool = _workerPool;
+    _workerPool = null;
+    _workerPoolSize = 0;
+    if (workerPool != null) {
+      await workerPool.close();
+    }
+  }
+
   int _resolveFrameParallelism(int configuredParallelism) {
     if (configuredParallelism > 0) {
       return configuredParallelism;
@@ -178,6 +163,22 @@ class FlacEncoder {
 
     // Keep one core for the main isolate.
     return cpuCount - 1;
+  }
+
+  Future<_FlacWorkerPool> _getOrCreateWorkerPool(int workerCount) async {
+    final existingPool = _workerPool;
+    if (existingPool != null && _workerPoolSize == workerCount) {
+      return existingPool;
+    }
+
+    if (existingPool != null) {
+      await existingPool.close();
+    }
+
+    final newPool = await _FlacWorkerPool.spawn(workerCount);
+    _workerPool = newPool;
+    _workerPoolSize = workerCount;
+    return newPool;
   }
 
   List<_FrameEncodeTask> _buildFrameTasks(
@@ -935,18 +936,6 @@ Uint8List _encodeFrameTask(_FrameEncodeTask task) {
   }
 }
 
-List<_IndexedTransferableEncodedFrame> _encodeTransferableFrameChunk(
-  List<_IndexedTransferableFrameEncodeTask> chunk,
-) {
-  return [
-    for (final indexedTask in chunk)
-      _IndexedTransferableEncodedFrame(
-        frameIndex: indexedTask.frameIndex,
-        bytes: _encodeTransferableFrameTask(indexedTask.task),
-      ),
-  ];
-}
-
 TransferableTypedData _encodeTransferableFrameTask(
   _TransferableFrameEncodeTask task,
 ) {
@@ -965,16 +954,6 @@ TransferableTypedData _encodeTransferableFrameTask(
   }
 }
 
-class _IndexedTransferableFrameEncodeTask {
-  final int frameIndex;
-  final _TransferableFrameEncodeTask task;
-
-  const _IndexedTransferableFrameEncodeTask({
-    required this.frameIndex,
-    required this.task,
-  });
-}
-
 class _IndexedTransferableEncodedFrame {
   final int frameIndex;
   final TransferableTypedData bytes;
@@ -983,6 +962,152 @@ class _IndexedTransferableEncodedFrame {
     required this.frameIndex,
     required this.bytes,
   });
+}
+
+const _workerMessageEncode = 0;
+const _workerMessageClose = 1;
+const _workerResponseOk = 0;
+const _workerResponseError = 1;
+
+void _flacEncodeWorkerMain(SendPort readyPort) {
+  final commandPort = ReceivePort();
+  readyPort.send(commandPort.sendPort);
+
+  commandPort.listen((dynamic message) {
+    if (message is! List || message.isEmpty) {
+      return;
+    }
+
+    final messageType = message[0];
+    if (messageType == _workerMessageEncode) {
+      final frameIndex = message[1] as int;
+      final task = message[2] as _TransferableFrameEncodeTask;
+      final replyPort = message[3] as SendPort;
+      try {
+        final encoded = _encodeTransferableFrameTask(task);
+        replyPort.send([_workerResponseOk, frameIndex, encoded]);
+      } catch (error, stackTrace) {
+        replyPort.send([
+          _workerResponseError,
+          frameIndex,
+          error.toString(),
+          stackTrace.toString(),
+        ]);
+      }
+      return;
+    }
+
+    if (messageType == _workerMessageClose) {
+      final replyPort = message[1] as SendPort;
+      replyPort.send(true);
+      commandPort.close();
+    }
+  });
+}
+
+class _FlacWorkerPool {
+  final List<_FlacWorkerClient> _workers;
+  int _nextWorkerIndex = 0;
+  bool _closed = false;
+
+  _FlacWorkerPool._(this._workers);
+
+  static Future<_FlacWorkerPool> spawn(int workerCount) async {
+    final workers = <_FlacWorkerClient>[];
+    for (int i = 0; i < workerCount; i++) {
+      workers.add(await _FlacWorkerClient.spawn(i));
+    }
+    return _FlacWorkerPool._(workers);
+  }
+
+  Future<List<_IndexedTransferableEncodedFrame>> encodeTasks(
+    List<_TransferableFrameEncodeTask> tasks,
+  ) async {
+    if (_closed) {
+      throw StateError('Flac worker pool is already closed.');
+    }
+
+    final futures = <Future<_IndexedTransferableEncodedFrame>>[];
+    for (int i = 0; i < tasks.length; i++) {
+      final worker = _workers[_nextWorkerIndex];
+      _nextWorkerIndex = (_nextWorkerIndex + 1) % _workers.length;
+      futures.add(worker.encodeFrame(i, tasks[i]));
+    }
+
+    return Future.wait(futures);
+  }
+
+  Future<void> close() async {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+    await Future.wait([
+      for (final worker in _workers) worker.close(),
+    ]);
+  }
+}
+
+class _FlacWorkerClient {
+  final Isolate _isolate;
+  final SendPort _commandPort;
+  bool _closed = false;
+
+  _FlacWorkerClient._(this._isolate, this._commandPort);
+
+  static Future<_FlacWorkerClient> spawn(int workerIndex) async {
+    final readyPort = ReceivePort();
+    final isolate = await Isolate.spawn<SendPort>(
+      _flacEncodeWorkerMain,
+      readyPort.sendPort,
+      debugName: 'flac-encode-worker-$workerIndex',
+    );
+    final commandPort = await readyPort.first as SendPort;
+    readyPort.close();
+    return _FlacWorkerClient._(isolate, commandPort);
+  }
+
+  Future<_IndexedTransferableEncodedFrame> encodeFrame(
+    int frameIndex,
+    _TransferableFrameEncodeTask task,
+  ) async {
+    if (_closed) {
+      throw StateError('Flac worker is already closed.');
+    }
+
+    final responsePort = ReceivePort();
+    _commandPort.send([_workerMessageEncode, frameIndex, task, responsePort.sendPort]);
+
+    final response = await responsePort.first as List<dynamic>;
+    responsePort.close();
+
+    final status = response[0];
+    if (status == _workerResponseOk) {
+      return _IndexedTransferableEncodedFrame(
+        frameIndex: response[1] as int,
+        bytes: response[2] as TransferableTypedData,
+      );
+    }
+
+    final frame = response[1];
+    final error = response.length > 2 ? response[2] : 'unknown error';
+    final stack = response.length > 3 ? response[3] : '';
+    throw StateError('Worker failed on frame $frame: $error\n$stack');
+  }
+
+  Future<void> close() async {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+
+    final ackPort = ReceivePort();
+    _commandPort.send([_workerMessageClose, ackPort.sendPort]);
+    await ackPort.first;
+    ackPort.close();
+
+    _isolate.kill(priority: Isolate.immediate);
+  }
 }
 
 class _FrameEncodeTask {
