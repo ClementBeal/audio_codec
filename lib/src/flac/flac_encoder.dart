@@ -28,6 +28,9 @@ class FlacEncoder {
   // Frame header bit-depth code for 16-bit samples.
   static const _frameBitDepthCode = 0x4;
 
+  // Subframe header byte for constant samples (no wasted bits).
+  static const _constantSubframeHeader = 0x00;
+
   // Subframe header byte for verbatim samples (no wasted bits).
   static const _verbatimSubframeHeader = 0x02;
 
@@ -152,15 +155,14 @@ class FlacEncoder {
     frame.add(headerBytes);
     frame.addByte(headerCrc);
 
-    // One verbatim subframe per channel.
+    // One subframe per channel:
+    // - constant if all samples in the channel chunk are identical
+    // - verbatim otherwise
     for (final channel in samples) {
-      frame.addByte(_verbatimSubframeHeader);
-
-      // Write each sample as signed big-endian 16-bit.
-      for (final sample in channel) {
-        final sample16 = sample & 0xFFFF;
-        frame.addByte((sample16 >> 8) & 0xFF);
-        frame.addByte(sample16 & 0xFF);
+      if (_isConstantChannel(channel)) {
+        _writeConstantSubframe(frame, channel.first);
+      } else {
+        _writeVerbatimSubframe(frame, channel);
       }
     }
 
@@ -170,6 +172,54 @@ class FlacEncoder {
     frame.addByte(frameCrc16 & 0xFF);
 
     return frame.toBytes();
+  }
+
+  bool _isConstantChannel(Samples channel) {
+    if (channel.isEmpty) {
+      return true;
+    }
+
+    final reference = channel.first;
+    for (int i = 1; i < channel.length; i++) {
+      if (channel[i] != reference) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /// Writes a FLAC `constant` subframe for one channel.
+  ///
+  /// Layout:
+  /// - 1 byte subframe header (`_constantSubframeHeader`)
+  /// - 1 signed sample value, reused for the whole block
+  ///
+  /// With the current 16-bit encoder configuration, this value is written
+  /// on 2 bytes in big-endian order.
+  void _writeConstantSubframe(BytesBuilder frame, int sampleValue) {
+    frame.addByte(_constantSubframeHeader);
+    final sample16 = sampleValue & 0xFFFF;
+    frame.addByte((sample16 >> 8) & 0xFF);
+    frame.addByte(sample16 & 0xFF);
+  }
+
+  /// Writes a FLAC `verbatim` subframe for one channel.
+  ///
+  /// Layout:
+  /// - 1 byte subframe header (`_verbatimSubframeHeader`)
+  /// - all channel samples written directly, without prediction/residual coding
+  ///
+  /// Each sample is currently encoded as signed 16-bit big-endian.
+  void _writeVerbatimSubframe(BytesBuilder frame, Samples channel) {
+    frame.addByte(_verbatimSubframeHeader);
+
+    // Write each sample as signed big-endian 16-bit.
+    for (final sample in channel) {
+      final sample16 = sample & 0xFFFF;
+      frame.addByte((sample16 >> 8) & 0xFF);
+      frame.addByte(sample16 & 0xFF);
+    }
   }
 
   /// Encodes the frame index for the FLAC frame header.
