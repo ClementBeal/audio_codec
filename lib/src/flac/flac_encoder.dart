@@ -47,6 +47,8 @@ class FlacEncoder {
   static const _verbatimSubframeHeader = 0x02;
 
   FlacEncoderConfig? _activeConfig;
+  Int32List _residualScratch = Int32List(0);
+  Int32List _foldedResidualScratch = Int32List(0);
 
   FlacEncoderConfig get _config {
     final config = _activeConfig;
@@ -242,17 +244,24 @@ class FlacEncoder {
   _FixedPredictorDecision? _chooseFixedPredictor(Samples channel) {
     final verbatimBits = 8 + channel.length * _config.bitsPerSample;
     _FixedPredictorDecision? best;
+    _ensureResidualScratchCapacity(channel.length);
 
     final maxOrder = channel.length > _config.maxFixedPredictorOrder
         ? _config.maxFixedPredictorOrder
         : channel.length;
 
     for (int order = 0; order <= maxOrder; order++) {
-      final residuals = _computeFixedResiduals(channel, order);
-      final foldedResiduals = _foldResiduals(residuals);
-      final riceParameter = _chooseRiceParameter(foldedResiduals);
+      final residualLength =
+          _computeFixedResidualsInto(channel, order, _residualScratch);
+      _foldResidualsInto(
+        _residualScratch,
+        residualLength,
+        _foldedResidualScratch,
+      );
+      final riceParameter =
+          _chooseRiceParameter(_foldedResidualScratch, residualLength);
       final estimatedBits =
-          _estimateFixedSubframeBitCount(order, foldedResiduals, riceParameter);
+          _estimateFixedSubframeBitCount(order, residualLength, riceParameter);
 
       if (estimatedBits >= verbatimBits) {
         continue;
@@ -262,7 +271,7 @@ class FlacEncoder {
         best = _FixedPredictorDecision(
           order: order,
           riceParameter: riceParameter,
-          residuals: residuals,
+          residuals: _copyInt32Prefix(_residualScratch, residualLength),
           estimatedBits: estimatedBits,
         );
       }
@@ -281,6 +290,7 @@ class FlacEncoder {
     if (maxOrder < 1) {
       return null;
     }
+    _ensureResidualScratchCapacity(channel.length);
 
     final autocorrelation = _computeAutocorrelation(channel, maxOrder);
     if (autocorrelation == null) {
@@ -323,12 +333,18 @@ class FlacEncoder {
         continue;
       }
 
-      final residuals = _computeLpcResiduals(channel, quantized, order);
-      final foldedResiduals = _foldResiduals(residuals);
-      final riceParameter = _chooseRiceParameter(foldedResiduals);
+      final residualLength =
+          _computeLpcResidualsInto(channel, quantized, order, _residualScratch);
+      _foldResidualsInto(
+        _residualScratch,
+        residualLength,
+        _foldedResidualScratch,
+      );
+      final riceParameter =
+          _chooseRiceParameter(_foldedResidualScratch, residualLength);
       final estimatedBits = _estimateLpcSubframeBitCount(
         order,
-        foldedResiduals,
+        residualLength,
         riceParameter,
         quantized.precision,
       );
@@ -341,7 +357,7 @@ class FlacEncoder {
         best = _LpcPredictorDecision(
           order: order,
           riceParameter: riceParameter,
-          residuals: residuals,
+          residuals: _copyInt32Prefix(_residualScratch, residualLength),
           estimatedBits: estimatedBits,
           qlpPrecision: quantized.precision,
           shift: quantized.shift,
@@ -353,9 +369,12 @@ class FlacEncoder {
     return best;
   }
 
-  List<int> _computeFixedResiduals(Samples channel, int order) {
-    final residuals = <int>[];
-
+  int _computeFixedResidualsInto(
+    Samples channel,
+    int order,
+    Int32List outResiduals,
+  ) {
+    int outIndex = 0;
     for (int i = order; i < channel.length; i++) {
       final sample = channel[i];
       int prediction;
@@ -383,23 +402,23 @@ class FlacEncoder {
           throw ArgumentError.value(order, 'order', 'unsupported fixed order');
       }
 
-      residuals.add(sample - prediction);
+      outResiduals[outIndex++] = sample - prediction;
     }
 
-    return residuals;
+    return outIndex;
   }
 
-  int _chooseRiceParameter(List<int> foldedResiduals) {
-    if (foldedResiduals.isEmpty) {
+  int _chooseRiceParameter(Int32List foldedResiduals, int length) {
+    if (length == 0) {
       return 0;
     }
 
     int sumAbs = 0;
-    for (final folded in foldedResiduals) {
-      sumAbs += (folded + 1) >> 1;
+    for (int i = 0; i < length; i++) {
+      sumAbs += (foldedResiduals[i] + 1) >> 1;
     }
 
-    final meanAbs = sumAbs / foldedResiduals.length;
+    final meanAbs = sumAbs / length;
     final estimated = meanAbs <= 0
         ? 0
         : (math.log(meanAbs * math.ln2) / math.ln2).round().clamp(0, 14);
@@ -408,14 +427,16 @@ class FlacEncoder {
     final candidateMax = estimated < 14 ? estimated + 1 : 14;
 
     int bestParameter = estimated;
-    int bestBits = _estimateRiceBitsForParameter(foldedResiduals, estimated);
+    int bestBits =
+        _estimateRiceBitsForParameter(foldedResiduals, length, estimated);
 
     for (int parameter = candidateMin; parameter <= candidateMax; parameter++) {
       if (parameter == estimated) {
         continue;
       }
 
-      final bits = _estimateRiceBitsForParameter(foldedResiduals, parameter);
+      final bits =
+          _estimateRiceBitsForParameter(foldedResiduals, length, parameter);
       if (bits < bestBits) {
         bestBits = bits;
         bestParameter = parameter;
@@ -425,10 +446,14 @@ class FlacEncoder {
     return bestParameter;
   }
 
-  int _estimateRiceBitsForParameter(List<int> foldedResiduals, int parameter) {
+  int _estimateRiceBitsForParameter(
+    Int32List foldedResiduals,
+    int length,
+    int parameter,
+  ) {
     int bits = 0;
-    for (final folded in foldedResiduals) {
-      final quotient = folded >> parameter;
+    for (int i = 0; i < length; i++) {
+      final quotient = foldedResiduals[i] >> parameter;
       bits += quotient + 1 + parameter;
     }
     return bits;
@@ -436,14 +461,14 @@ class FlacEncoder {
 
   int _estimateFixedSubframeBitCount(
     int order,
-    List<int> foldedResiduals,
+    int residualLength,
     int riceParameter,
   ) {
     // Subframe header + warm-up samples + residual header.
     int bits = 8 + (order * _config.bitsPerSample) + 10;
 
-    for (final folded in foldedResiduals) {
-      final quotient = folded >> riceParameter;
+    for (int i = 0; i < residualLength; i++) {
+      final quotient = _foldedResidualScratch[i] >> riceParameter;
       bits += quotient + 1 + riceParameter;
     }
 
@@ -452,7 +477,7 @@ class FlacEncoder {
 
   int _estimateLpcSubframeBitCount(
     int order,
-    List<int> foldedResiduals,
+    int residualLength,
     int riceParameter,
     int qlpPrecision,
   ) {
@@ -464,8 +489,8 @@ class FlacEncoder {
         (order * qlpPrecision) +
         10;
 
-    for (final folded in foldedResiduals) {
-      final quotient = folded >> riceParameter;
+    for (int i = 0; i < residualLength; i++) {
+      final quotient = _foldedResidualScratch[i] >> riceParameter;
       bits += quotient + 1 + riceParameter;
     }
 
@@ -538,7 +563,7 @@ class FlacEncoder {
 
   void _writeRiceResiduals(
     BitWriter writer,
-    List<int> residuals,
+    Int32List residuals,
     int riceParameter,
   ) {
     // Residual header:
@@ -548,8 +573,8 @@ class FlacEncoder {
     writer.writeBits(0, 4);
     writer.writeBits(riceParameter, 4);
 
-    for (final residual in residuals) {
-      final folded = _foldResidual(residual);
+    for (int i = 0; i < residuals.length; i++) {
+      final folded = _foldResidual(residuals[i]);
       final quotient = folded >> riceParameter;
       final remainderMask = (1 << riceParameter) - 1;
       final remainder = folded & remainderMask;
@@ -565,13 +590,14 @@ class FlacEncoder {
     return residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
   }
 
-  List<int> _foldResiduals(List<int> residuals) {
-    final foldedResiduals =
-        List<int>.filled(residuals.length, 0, growable: false);
-    for (int i = 0; i < residuals.length; i++) {
-      foldedResiduals[i] = _foldResidual(residuals[i]);
+  void _foldResidualsInto(
+    Int32List residuals,
+    int length,
+    Int32List outFoldedResiduals,
+  ) {
+    for (int i = 0; i < length; i++) {
+      outFoldedResiduals[i] = _foldResidual(residuals[i]);
     }
-    return foldedResiduals;
   }
 
   List<double>? _computeAutocorrelation(Samples channel, int maxOrder) {
@@ -637,22 +663,38 @@ class FlacEncoder {
     );
   }
 
-  List<int> _computeLpcResiduals(
+  int _computeLpcResidualsInto(
     Samples channel,
     _QuantizedLpc quantized,
     int order,
+    Int32List outResiduals,
   ) {
-    final residuals = <int>[];
+    int outIndex = 0;
     for (int i = order; i < channel.length; i++) {
       int prediction = 0;
       for (int j = 0; j < order; j++) {
         prediction += quantized.coefficients[j] * channel[i - 1 - j];
       }
       prediction >>= quantized.shift;
-      residuals.add(channel[i] - prediction);
+      outResiduals[outIndex++] = channel[i] - prediction;
     }
 
-    return residuals;
+    return outIndex;
+  }
+
+  void _ensureResidualScratchCapacity(int minLength) {
+    if (_residualScratch.length < minLength) {
+      _residualScratch = Int32List(minLength);
+    }
+    if (_foldedResidualScratch.length < minLength) {
+      _foldedResidualScratch = Int32List(minLength);
+    }
+  }
+
+  Int32List _copyInt32Prefix(Int32List source, int length) {
+    final copy = Int32List(length);
+    copy.setRange(0, length, source);
+    return copy;
   }
 
   /// Writes a FLAC `verbatim` subframe for one channel.
@@ -737,7 +779,7 @@ class FlacEncoder {
 class _FixedPredictorDecision {
   final int order;
   final int riceParameter;
-  final List<int> residuals;
+  final Int32List residuals;
   final int estimatedBits;
 
   const _FixedPredictorDecision({
@@ -751,7 +793,7 @@ class _FixedPredictorDecision {
 class _LpcPredictorDecision {
   final int order;
   final int riceParameter;
-  final List<int> residuals;
+  final Int32List residuals;
   final int estimatedBits;
   final int qlpPrecision;
   final int shift;
