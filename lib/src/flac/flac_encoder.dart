@@ -80,7 +80,7 @@ class FlacEncoder {
         // restricted to [start, endExclusive).
         final frameChannels = <Samples>[
           for (final channel in samples)
-            Int32List.fromList(channel.sublist(start, endExclusive)),
+            Int32List.sublistView(channel, start, endExclusive),
         ];
 
         bytes.add(_encode(frameChannels, frameNumber));
