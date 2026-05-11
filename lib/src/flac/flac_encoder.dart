@@ -34,6 +34,9 @@ class FlacEncoder {
   // Subframe header byte for verbatim samples (no wasted bits).
   static const _verbatimSubframeHeader = 0x02;
 
+  // Maximum polynomial predictor order attempted before falling back to verbatim.
+  static const _maxPolynomialOrder = 5;
+
   Uint8List encode(List<Samples> samples) {
     final bytes = BytesBuilder(copy: false);
     bytes.add(_flacMagicWord);
@@ -155,16 +158,27 @@ class FlacEncoder {
     frame.add(headerBytes);
     frame.addByte(headerCrc);
 
+    final subframeWriter = _BitWriter(frame);
+
     // One subframe per channel:
     // - constant if all samples in the channel chunk are identical
+    // - polynomial predictor (up to order 5) if it matches exactly
     // - verbatim otherwise
     for (final channel in samples) {
       if (_isConstantChannel(channel)) {
-        _writeConstantSubframe(frame, channel.first);
+        _writeConstantSubframe(subframeWriter, channel.first);
       } else {
-        _writeVerbatimSubframe(frame, channel);
+        final predictor = _findPolynomialPredictor(channel);
+        if (predictor != null) {
+          _writePolynomialSubframe(subframeWriter, channel, predictor);
+        } else {
+          _writeVerbatimSubframe(subframeWriter, channel);
+        }
       }
     }
+
+    // Frame CRC16 must be byte-aligned.
+    subframeWriter.alignToByte();
 
     final frameBytesWithoutCrc16 = frame.toBytes();
     final frameCrc16 = _calculateCrc16(frameBytesWithoutCrc16);
@@ -189,6 +203,58 @@ class FlacEncoder {
     return true;
   }
 
+  _PolynomialPredictor? _findPolynomialPredictor(Samples channel) {
+    for (int order = 2; order <= _maxPolynomialOrder; order++) {
+      if (channel.length < order) {
+        continue;
+      }
+
+      final coefficients = _coefficientsForOrder(order);
+      if (coefficients == null) {
+        continue;
+      }
+
+      if (_matchesPredictor(channel, coefficients)) {
+        return _PolynomialPredictor(order: order, coefficients: coefficients);
+      }
+    }
+
+    return null;
+  }
+
+  List<int>? _coefficientsForOrder(int order) {
+    return switch (order) {
+      2 => const [2, -1],
+      3 => const [3, -3, 1],
+      4 => const [4, -6, 4, -1],
+      5 => const [5, -10, 10, -5, 1],
+      _ => null,
+    };
+  }
+
+  bool _matchesPredictor(Samples channel, List<int> coefficients) {
+    final order = coefficients.length;
+    for (int i = order; i < channel.length; i++) {
+      int predicted = 0;
+      for (int j = 0; j < order; j++) {
+        predicted += coefficients[j] * channel[i - 1 - j];
+      }
+
+      if (predicted != channel[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  int _lpcSubframeHeaderForOrder(int order) {
+    // Decoder maps subframeType back to order with: order = subframeType - 31.
+    // So we encode subframeType as order + 31, then place it in the 6-bit slot.
+    final subframeType = order + 31;
+    return subframeType << 1;
+  }
+
   /// Writes a FLAC `constant` subframe for one channel.
   ///
   /// Layout:
@@ -197,11 +263,52 @@ class FlacEncoder {
   ///
   /// With the current 16-bit encoder configuration, this value is written
   /// on 2 bytes in big-endian order.
-  void _writeConstantSubframe(BytesBuilder frame, int sampleValue) {
-    frame.addByte(_constantSubframeHeader);
-    final sample16 = sampleValue & 0xFFFF;
-    frame.addByte((sample16 >> 8) & 0xFF);
-    frame.addByte(sample16 & 0xFF);
+  void _writeConstantSubframe(_BitWriter writer, int sampleValue) {
+    writer.writeBits(_constantSubframeHeader, 8);
+    writer.writeSigned(sampleValue, _bitsPerSample);
+  }
+
+  /// Writes a FLAC `polynomial` subframe using LPC coding.
+  ///
+  /// This is used when a channel matches a deterministic polynomial predictor
+  /// (order 2..5 in this encoder). We encode:
+  /// - LPC subframe header
+  /// - warm-up samples (`order` values)
+  /// - LPC precision / shift / coefficients
+  /// - residual coding configured as "escaped with 0-bit width", which means
+  ///   all residuals are implicitly zero.
+  void _writePolynomialSubframe(
+    _BitWriter writer,
+    Samples channel,
+    _PolynomialPredictor predictor,
+  ) {
+    writer.writeBits(_lpcSubframeHeaderForOrder(predictor.order), 8);
+
+    for (int i = 0; i < predictor.order; i++) {
+      writer.writeSigned(channel[i], _bitsPerSample);
+    }
+
+    const coefficientPrecisionMinusOne = 15;
+    const rightShiftNeeded = 0;
+
+    writer.writeBits(coefficientPrecisionMinusOne, 4);
+    writer.writeSigned(rightShiftNeeded, 5);
+
+    for (final coefficient in predictor.coefficients) {
+      writer.writeSigned(coefficient, coefficientPrecisionMinusOne + 1);
+    }
+
+    // Residual coding:
+    // - Rice coding method 0 (2 bits)
+    // - partition order 0 (4 bits)
+    // - escaped parameter 15 on 4 bits
+    // - escaped residual bit width 0 on 5 bits
+    //
+    // With escaped width 0, decoder yields zero residual for every element.
+    writer.writeBits(0, 2);
+    writer.writeBits(0, 4);
+    writer.writeBits(15, 4);
+    writer.writeBits(0, 5);
   }
 
   /// Writes a FLAC `verbatim` subframe for one channel.
@@ -211,14 +318,12 @@ class FlacEncoder {
   /// - all channel samples written directly, without prediction/residual coding
   ///
   /// Each sample is currently encoded as signed 16-bit big-endian.
-  void _writeVerbatimSubframe(BytesBuilder frame, Samples channel) {
-    frame.addByte(_verbatimSubframeHeader);
+  void _writeVerbatimSubframe(_BitWriter writer, Samples channel) {
+    writer.writeBits(_verbatimSubframeHeader, 8);
 
     // Write each sample as signed big-endian 16-bit.
     for (final sample in channel) {
-      final sample16 = sample & 0xFFFF;
-      frame.addByte((sample16 >> 8) & 0xFF);
-      frame.addByte(sample16 & 0xFF);
+      writer.writeSigned(sample, _bitsPerSample);
     }
   }
 
@@ -301,5 +406,52 @@ class FlacEncoder {
     }
 
     return crc;
+  }
+}
+
+class _PolynomialPredictor {
+  final int order;
+  final List<int> coefficients;
+
+  const _PolynomialPredictor({
+    required this.order,
+    required this.coefficients,
+  });
+}
+
+class _BitWriter {
+  final BytesBuilder _bytes;
+  int _currentByte = 0;
+  int _nextBitIndex = 7;
+
+  _BitWriter(this._bytes);
+
+  void writeBits(int value, int bitCount) {
+    for (int i = bitCount - 1; i >= 0; i--) {
+      final bit = (value >> i) & 0x1;
+      _currentByte |= bit << _nextBitIndex;
+      _nextBitIndex--;
+
+      if (_nextBitIndex < 0) {
+        _bytes.addByte(_currentByte & 0xFF);
+        _currentByte = 0;
+        _nextBitIndex = 7;
+      }
+    }
+  }
+
+  void writeSigned(int value, int bitCount) {
+    final mask = (1 << bitCount) - 1;
+    writeBits(value & mask, bitCount);
+  }
+
+  void alignToByte() {
+    if (_nextBitIndex == 7) {
+      return;
+    }
+
+    _bytes.addByte(_currentByte & 0xFF);
+    _currentByte = 0;
+    _nextBitIndex = 7;
   }
 }
