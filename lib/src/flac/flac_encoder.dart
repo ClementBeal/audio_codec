@@ -9,10 +9,31 @@ class FlacEncoder {
   // Fixed STREAMINFO payload length in FLAC (always 34 bytes).
   static const _streamInfoBlockLength = 34;
 
+  // Number of inter-channel samples targeted per frame.
+  static const _frameBlockSize = 4096;
+
   Uint8List encode(List<Samples> samples) {
     final bytes = BytesBuilder(copy: false);
     bytes.add(_flacMagicWord);
     _writeStreamInfoBlock(bytes, samples);
+
+    final totalSamples = samples.first.length;
+    for (int start = 0; start < totalSamples; start += _frameBlockSize) {
+      // End index (exclusive) of the current frame window, clamped to
+      // totalSamples for the last partial frame.
+      final endExclusive = (start + _frameBlockSize < totalSamples)
+          ? start + _frameBlockSize
+          : totalSamples;
+
+      // Per-channel PCM chunk for this frame: each entry is one channel
+      // restricted to [start, endExclusive).
+      final frameChannels = <Samples>[
+        for (final channel in samples)
+          Int32List.fromList(channel.sublist(start, endExclusive)),
+      ];
+
+      bytes.add(_encode(frameChannels));
+    }
 
     return bytes.toBytes();
   }
@@ -49,9 +70,8 @@ class FlacEncoder {
     final streamInfoView = ByteData.sublistView(streamInfo);
 
     // Target block size declared in STREAMINFO.
-    const declaredBlockSize = 4096;
-    streamInfoView.setUint16(0, declaredBlockSize, Endian.big); // min block size
-    streamInfoView.setUint16(2, declaredBlockSize, Endian.big); // max block size
+    streamInfoView.setUint16(0, _frameBlockSize, Endian.big); // min block size
+    streamInfoView.setUint16(2, _frameBlockSize, Endian.big); // max block size
 
     // Sample rate declared in STREAMINFO.
     const sampleRate = 44100;
@@ -79,5 +99,9 @@ class FlacEncoder {
 
     // Last 16 bytes (PCM MD5) are left as zero for now.
     bytes.add(streamInfo);
+  }
+
+  Uint8List _encode(List<Samples> _) {
+    throw UnimplementedError('_encode is not implemented yet');
   }
 }
