@@ -39,7 +39,8 @@ class BitWriter {
   }
 
   void writeSigned(int value, int bitCount) {
-    writeBits(value, bitCount); // writeBits already masks bits, so signed works directly.
+    writeBits(value,
+        bitCount); // writeBits already masks bits, so signed works directly.
   }
 
   void writeUnaryZeroCount(int zeroCount) {
@@ -87,8 +88,12 @@ class BitWriter {
   }
 
   void _flushBuffer() {
-    // sublistView creates a zero-copy view (very fast).
-    _bytes.add(Uint8List.sublistView(_buffer, 0, _bufferPos));
+    // Copy before add: _buffer is reused and mutated after flush.
+    // With BytesBuilder(copy: false), passing a view would corrupt
+    // previously appended bytes.
+    final chunk = Uint8List(_bufferPos);
+    chunk.setRange(0, _bufferPos, _buffer);
+    _bytes.add(chunk);
     _bufferPos = 0;
   }
 }

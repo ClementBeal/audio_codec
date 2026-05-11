@@ -1,3 +1,5 @@
+import 'dart:isolate';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'dart:math' as math;
 
@@ -13,6 +15,8 @@ class FlacEncoderConfig {
   final int maxFixedPredictorOrder;
   final int maxLpcOrder;
   final int lpcCoefficientPrecision;
+  // 0 => auto (based on CPU count), 1 => sequential, >1 => fixed parallelism.
+  final int frameParallelism;
 
   const FlacEncoderConfig({
     this.frameBlockSize = 4096,
@@ -21,7 +25,8 @@ class FlacEncoderConfig {
     this.maxFixedPredictorOrder = 4,
     this.maxLpcOrder = 8,
     this.lpcCoefficientPrecision = 12,
-  });
+    this.frameParallelism = 0,
+  }) : assert(frameParallelism >= 0, 'frameParallelism must be >= 0');
 }
 
 class FlacEncoder {
@@ -68,32 +73,140 @@ class FlacEncoder {
       bytes.add(_flacMagicWord);
       _writeStreamInfoBlock(bytes, samples);
 
-      final totalSamples = samples.first.length;
-      int frameNumber = 0;
-      final frameBlockSize = _config.frameBlockSize;
+      final frameTasks = _buildFrameTasks(
+        samples,
+        config,
+        copyChannels: false,
+      );
 
-      for (int start = 0; start < totalSamples; start += frameBlockSize) {
-        // End index (exclusive) of the current frame window, clamped to
-        // totalSamples for the last partial frame.
-        final endExclusive = (start + frameBlockSize < totalSamples)
-            ? start + frameBlockSize
-            : totalSamples;
-
-        // Per-channel PCM chunk for this frame: each entry is one channel
-        // restricted to [start, endExclusive).
-        final frameChannels = <Samples>[
-          for (final channel in samples)
-            Int32List.sublistView(channel, start, endExclusive),
-        ];
-
-        bytes.add(_encode(frameChannels, frameNumber));
-        frameNumber++;
+      for (final task in frameTasks) {
+        bytes.add(_encode(task.channels, task.frameNumber));
       }
 
       return bytes.toBytes();
     } finally {
       _activeConfig = null;
     }
+  }
+
+  Future<Uint8List> encodeParallel(
+    List<Samples> samples, {
+    required FlacEncoderConfig config,
+  }) async {
+    _activeConfig = config;
+    try {
+      final bytes = BytesBuilder(copy: false);
+      bytes.add(_flacMagicWord);
+      _writeStreamInfoBlock(bytes, samples);
+
+      final frameTasks = _buildFrameTasks(
+        samples,
+        config,
+        copyChannels: true,
+      );
+
+      if (frameTasks.isEmpty) {
+        return bytes.toBytes();
+      }
+
+      final parallelism = _resolveFrameParallelism(config.frameParallelism);
+      if (parallelism <= 1 || frameTasks.length == 1) {
+        for (final task in frameTasks) {
+          bytes.add(_encodeFrameTask(task));
+        }
+      } else {
+        final workerCount = math.min(parallelism, frameTasks.length);
+        final indexedChunks = List.generate(
+          workerCount,
+          (_) => <_IndexedFrameEncodeTask>[],
+          growable: false,
+        );
+        for (int i = 0; i < frameTasks.length; i++) {
+          indexedChunks[i % workerCount].add(
+            _IndexedFrameEncodeTask(
+              frameIndex: i,
+              task: frameTasks[i],
+            ),
+          );
+        }
+
+        final encodedChunks = await Future.wait([
+          for (int i = 0; i < workerCount; i++)
+            Isolate.run(
+              () => _encodeFrameChunk(indexedChunks[i]),
+              debugName: 'flac-encode-worker-$i',
+            ),
+        ]);
+
+        final encodedFrames = List<Uint8List?>.filled(frameTasks.length, null);
+        for (final chunk in encodedChunks) {
+          for (final encoded in chunk) {
+            encodedFrames[encoded.frameIndex] = encoded.bytes;
+          }
+        }
+
+        for (int i = 0; i < frameTasks.length; i++) {
+          final encodedFrame = encodedFrames[i];
+          if (encodedFrame == null) {
+            throw StateError('Missing encoded frame at index $i');
+          }
+          bytes.add(encodedFrame);
+        }
+      }
+
+      return bytes.toBytes();
+    } finally {
+      _activeConfig = null;
+    }
+  }
+
+  int _resolveFrameParallelism(int configuredParallelism) {
+    if (configuredParallelism > 0) {
+      return configuredParallelism;
+    }
+
+    final cpuCount = Platform.numberOfProcessors;
+    if (cpuCount <= 1) {
+      return 1;
+    }
+
+    // Keep one core for the main isolate.
+    return cpuCount - 1;
+  }
+
+  List<_FrameEncodeTask> _buildFrameTasks(
+    List<Samples> samples,
+    FlacEncoderConfig config, {
+    required bool copyChannels,
+  }) {
+    final tasks = <_FrameEncodeTask>[];
+    final totalSamples = samples.first.length;
+    final frameBlockSize = config.frameBlockSize;
+
+    int frameNumber = 0;
+    for (int start = 0; start < totalSamples; start += frameBlockSize) {
+      final endExclusive = (start + frameBlockSize < totalSamples)
+          ? start + frameBlockSize
+          : totalSamples;
+
+      final frameChannels = <Samples>[
+        for (final channel in samples)
+          copyChannels
+              ? Int32List.fromList(channel.sublist(start, endExclusive))
+              : Int32List.sublistView(channel, start, endExclusive),
+      ];
+
+      tasks.add(
+        _FrameEncodeTask(
+          config: config,
+          frameNumber: frameNumber,
+          channels: frameChannels,
+        ),
+      );
+      frameNumber++;
+    }
+
+    return tasks;
   }
 
   /// Writes the first FLAC metadata block (`STREAMINFO`).
@@ -787,6 +900,59 @@ class _FixedPredictorDecision {
     required this.riceParameter,
     required this.residuals,
     required this.estimatedBits,
+  });
+}
+
+Uint8List _encodeFrameTask(_FrameEncodeTask task) {
+  final encoder = FlacEncoder();
+  encoder._activeConfig = task.config;
+  try {
+    return encoder._encode(task.channels, task.frameNumber);
+  } finally {
+    encoder._activeConfig = null;
+  }
+}
+
+List<_IndexedEncodedFrame> _encodeFrameChunk(
+    List<_IndexedFrameEncodeTask> chunk) {
+  return [
+    for (final indexedTask in chunk)
+      _IndexedEncodedFrame(
+        frameIndex: indexedTask.frameIndex,
+        bytes: _encodeFrameTask(indexedTask.task),
+      ),
+  ];
+}
+
+class _IndexedFrameEncodeTask {
+  final int frameIndex;
+  final _FrameEncodeTask task;
+
+  const _IndexedFrameEncodeTask({
+    required this.frameIndex,
+    required this.task,
+  });
+}
+
+class _IndexedEncodedFrame {
+  final int frameIndex;
+  final Uint8List bytes;
+
+  const _IndexedEncodedFrame({
+    required this.frameIndex,
+    required this.bytes,
+  });
+}
+
+class _FrameEncodeTask {
+  final FlacEncoderConfig config;
+  final int frameNumber;
+  final List<Samples> channels;
+
+  const _FrameEncodeTask({
+    required this.config,
+    required this.frameNumber,
+    required this.channels,
   });
 }
 
