@@ -278,13 +278,43 @@ class FlacEncoder {
     final maxOrder = channel.length - 1 < _config.maxLpcOrder
         ? channel.length - 1
         : _config.maxLpcOrder;
+    if (maxOrder < 1) {
+      return null;
+    }
+
+    final autocorrelation = _computeAutocorrelation(channel, maxOrder);
+    if (autocorrelation == null) {
+      return null;
+    }
+
+    final a = List<double>.filled(maxOrder + 1, 0.0, growable: false);
+    double error = autocorrelation[0];
+    const epsilon = 1e-12;
 
     for (int order = 1; order <= maxOrder; order++) {
-      final floating = _computeLpcCoefficients(channel, order);
-      if (floating == null) {
-        continue;
+      if (error.abs() < epsilon) {
+        break;
       }
 
+      double lambda = autocorrelation[order];
+      for (int j = 1; j < order; j++) {
+        lambda -= a[j] * autocorrelation[order - j];
+      }
+
+      lambda /= error;
+
+      final previous = List<double>.from(a, growable: false);
+      a[order] = lambda;
+      for (int j = 1; j < order; j++) {
+        a[j] = previous[j] - lambda * previous[order - j];
+      }
+
+      error *= (1.0 - lambda * lambda);
+      if (!error.isFinite || error <= epsilon) {
+        break;
+      }
+
+      final floating = [for (int i = 1; i <= order; i++) a[i]];
       final quantized = _quantizeLpcCoefficients(
         floating,
         _config.lpcCoefficientPrecision,
@@ -544,9 +574,9 @@ class FlacEncoder {
     return foldedResiduals;
   }
 
-  List<double>? _computeLpcCoefficients(Samples channel, int order) {
-    final r = List<double>.filled(order + 1, 0.0);
-    for (int lag = 0; lag <= order; lag++) {
+  List<double>? _computeAutocorrelation(Samples channel, int maxOrder) {
+    final r = List<double>.filled(maxOrder + 1, 0.0, growable: false);
+    for (int lag = 0; lag <= maxOrder; lag++) {
       double sum = 0.0;
       for (int i = lag; i < channel.length; i++) {
         sum += channel[i] * channel[i - lag];
@@ -554,39 +584,11 @@ class FlacEncoder {
       r[lag] = sum;
     }
 
-    if (r[0] == 0.0) {
+    if (r[0] == 0.0 || !r[0].isFinite) {
       return null;
     }
 
-    final a = List<double>.filled(order + 1, 0.0);
-    double error = r[0];
-    const epsilon = 1e-12;
-
-    for (int i = 1; i <= order; i++) {
-      double lambda = r[i];
-      for (int j = 1; j < i; j++) {
-        lambda -= a[j] * r[i - j];
-      }
-
-      if (error.abs() < epsilon) {
-        return null;
-      }
-
-      lambda /= error;
-
-      final previous = List<double>.from(a);
-      a[i] = lambda;
-      for (int j = 1; j < i; j++) {
-        a[j] = previous[j] - lambda * previous[i - j];
-      }
-
-      error *= (1.0 - lambda * lambda);
-      if (!error.isFinite || error <= epsilon) {
-        return null;
-      }
-    }
-
-    return [for (int i = 1; i <= order; i++) a[i]];
+    return r;
   }
 
   _QuantizedLpc? _quantizeLpcCoefficients(
