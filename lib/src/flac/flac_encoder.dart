@@ -204,7 +204,7 @@ class FlacEncoder {
       ];
 
       tasks.add(
-        _FrameEncodeTask(
+        (
           config: config,
           frameNumber: frameNumber,
           channels: frameChannels,
@@ -221,7 +221,7 @@ class FlacEncoder {
   ) {
     return [
       for (final task in frameTasks)
-        _TransferableFrameEncodeTask(
+        (
           config: task.config,
           frameNumber: task.frameNumber,
           channels: [
@@ -490,7 +490,7 @@ class FlacEncoder {
       }
 
       if (best == null || estimatedBits < best.estimatedBits) {
-        best = _LpcPredictorDecision(
+        best = (
           order: order,
           riceParameter: riceParameter,
           residuals: _copyInt32Prefix(_residualScratch, residualLength),
@@ -748,11 +748,14 @@ class FlacEncoder {
 
   List<double>? _computeAutocorrelation(Samples channel, int maxOrder) {
     final r = List<double>.filled(maxOrder + 1, 0.0, growable: false);
+    
     for (int lag = 0; lag <= maxOrder; lag++) {
       double sum = 0.0;
+      
       for (int i = lag; i < channel.length; i++) {
         sum += channel[i] * channel[i - lag];
       }
+      
       r[lag] = sum;
     }
 
@@ -802,7 +805,7 @@ class FlacEncoder {
       return null;
     }
 
-    return _QuantizedLpc(
+    return (
       precision: precision,
       shift: shift,
       coefficients: qlp,
@@ -1120,58 +1123,30 @@ class _FlacWorkerClient {
   }
 }
 
-class _FrameEncodeTask {
-  final FlacEncoderConfig config;
-  final int frameNumber;
-  final List<Samples> channels;
+typedef _FrameEncodeTask = ({
+  FlacEncoderConfig config,
+  int frameNumber,
+  List<Samples> channels,
+});
 
-  const _FrameEncodeTask({
-    required this.config,
-    required this.frameNumber,
-    required this.channels,
-  });
-}
+typedef _TransferableFrameEncodeTask = ({
+  FlacEncoderConfig config,
+  int frameNumber,
+  List<TransferableTypedData> channels,
+});
 
-class _TransferableFrameEncodeTask {
-  final FlacEncoderConfig config;
-  final int frameNumber;
-  final List<TransferableTypedData> channels;
+typedef _LpcPredictorDecision = ({
+  int order,
+  int riceParameter,
+  Int32List residuals,
+  int estimatedBits,
+  int qlpPrecision,
+  int shift,
+  List<int> coefficients,
+});
 
-  const _TransferableFrameEncodeTask({
-    required this.config,
-    required this.frameNumber,
-    required this.channels,
-  });
-}
-
-class _LpcPredictorDecision {
-  final int order;
-  final int riceParameter;
-  final Int32List residuals;
-  final int estimatedBits;
-  final int qlpPrecision;
-  final int shift;
-  final List<int> coefficients;
-
-  const _LpcPredictorDecision({
-    required this.order,
-    required this.riceParameter,
-    required this.residuals,
-    required this.estimatedBits,
-    required this.qlpPrecision,
-    required this.shift,
-    required this.coefficients,
-  });
-}
-
-class _QuantizedLpc {
-  final int precision;
-  final int shift;
-  final List<int> coefficients;
-
-  const _QuantizedLpc({
-    required this.precision,
-    required this.shift,
-    required this.coefficients,
-  });
-}
+typedef _QuantizedLpc = ({
+  int precision,
+  int shift,
+  List<int> coefficients,
+});
