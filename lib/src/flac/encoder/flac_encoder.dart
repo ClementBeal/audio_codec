@@ -1,5 +1,5 @@
-import 'dart:isolate';
 import 'dart:io' show Platform;
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:math' as math;
 
@@ -7,6 +7,8 @@ import 'package:audio_codec/src/flac/flac_decoder.dart';
 import 'package:audio_codec/src/utils/bit_writer.dart';
 import 'package:audio_codec/src/utils/crc/crc16.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
+
+part 'flac_encoder_parallel.dart';
 
 class FlacEncoderConfig {
   final int frameBlockSize;
@@ -118,7 +120,7 @@ class FlacEncoder {
         }
       } else {
         final transferableTasks = _buildTransferableFrameTasks(frameTasks);
-        final workerPool = await _getOrCreateWorkerPool(parallelism);
+        final workerPool = await _getOrCreateWorkerPool(this, parallelism);
         final encodedChunks = await workerPool.encodeTasks(transferableTasks);
 
         final encodedFrames = List<Uint8List?>.filled(frameTasks.length, null);
@@ -149,36 +151,6 @@ class FlacEncoder {
     if (workerPool != null) {
       await workerPool.close();
     }
-  }
-
-  int _resolveFrameParallelism(int configuredParallelism) {
-    if (configuredParallelism > 0) {
-      return configuredParallelism;
-    }
-
-    final cpuCount = Platform.numberOfProcessors;
-    if (cpuCount <= 1) {
-      return 1;
-    }
-
-    // Keep one core for the main isolate.
-    return cpuCount - 1;
-  }
-
-  Future<_FlacWorkerPool> _getOrCreateWorkerPool(int workerCount) async {
-    final existingPool = _workerPool;
-    if (existingPool != null && _workerPoolSize == workerCount) {
-      return existingPool;
-    }
-
-    if (existingPool != null) {
-      await existingPool.close();
-    }
-
-    final newPool = await _FlacWorkerPool.spawn(workerCount);
-    _workerPool = newPool;
-    _workerPoolSize = workerCount;
-    return newPool;
   }
 
   List<_FrameEncodeTask> _buildFrameTasks(
@@ -214,22 +186,6 @@ class FlacEncoder {
     }
 
     return tasks;
-  }
-
-  List<_TransferableFrameEncodeTask> _buildTransferableFrameTasks(
-    List<_FrameEncodeTask> frameTasks,
-  ) {
-    return [
-      for (final task in frameTasks)
-        (
-          config: task.config,
-          frameNumber: task.frameNumber,
-          channels: [
-            for (final channel in task.channels)
-              TransferableTypedData.fromList([channel]),
-          ],
-        ),
-    ];
   }
 
   /// Writes the first FLAC metadata block (`STREAMINFO`).
@@ -379,6 +335,7 @@ class FlacEncoder {
 
   _FixedPredictorDecision? _chooseFixedPredictor(Samples channel) {
     final verbatimBits = 8 + channel.length * _config.bitsPerSample;
+
     _FixedPredictorDecision? best;
     _ensureResidualScratchCapacity(channel.length);
 
@@ -387,17 +344,15 @@ class FlacEncoder {
         : channel.length;
 
     for (int order = 0; order <= maxOrder; order++) {
-      final residualLength =
-          _computeFixedResidualsInto(channel, order, _residualScratch);
+      final residualLength = _computeFixedResidualsInto(channel, order, _residualScratch);
       _foldResidualsInto(
-        _residualScratch,
-        residualLength,
-        _foldedResidualScratch,
-      );
-      final riceParameter =
-          _chooseRiceParameter(_foldedResidualScratch, residualLength);
-      final estimatedBits =
-          _estimateFixedSubframeBitCount(order, residualLength, riceParameter);
+                _residualScratch,
+                residualLength,
+                _foldedResidualScratch,
+              );
+      final riceParameter = _chooseRiceParameter(_foldedResidualScratch, residualLength);
+      final estimatedBits = _estimateFixedSubframeBitCount(
+              order, residualLength, riceParameter);
 
       if (estimatedBits >= verbatimBits) {
         continue;
@@ -527,7 +482,8 @@ class FlacEncoder {
       case 2:
         int outIndex = 0;
         for (int i = 2; i < channelLength; i++) {
-          outResiduals[outIndex++] = channel[i] - 2 * channel[i - 1] + channel[i - 2];
+          outResiduals[outIndex++] =
+              channel[i] - 2 * channel[i - 1] + channel[i - 2];
         }
         return outIndex;
       case 3:
@@ -720,7 +676,8 @@ class FlacEncoder {
     writer.writeBits(riceParameter, 4);
 
     for (int i = 0; i < residuals.length; i++) {
-      final folded = _foldResidual(residuals[i]);
+      final residual = residuals[i];
+      final folded = residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
       final quotient = folded >> riceParameter;
       final remainderMask = (1 << riceParameter) - 1;
       final remainder = folded & remainderMask;
@@ -732,30 +689,44 @@ class FlacEncoder {
     }
   }
 
-  int _foldResidual(int residual) {
-    return residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
-  }
-
   void _foldResidualsInto(
     Int32List residuals,
     int length,
     Int32List outFoldedResiduals,
   ) {
-    for (int i = 0; i < length; i++) {
-      outFoldedResiduals[i] = _foldResidual(residuals[i]);
+    // Unroll by 4 to reduce loop overhead on hot paths.
+    int i = 0;
+    final unrolledEnd = length - (length % 4);
+    while (i < unrolledEnd) {
+      final r0 = residuals[i];
+      outFoldedResiduals[i] = r0 >= 0 ? (r0 << 1) : ((-r0 << 1) - 1);
+      final r1 = residuals[i + 1];
+      outFoldedResiduals[i + 1] = r1 >= 0 ? (r1 << 1) : ((-r1 << 1) - 1);
+      final r2 = residuals[i + 2];
+      outFoldedResiduals[i + 2] = r2 >= 0 ? (r2 << 1) : ((-r2 << 1) - 1);
+      final r3 = residuals[i + 3];
+      outFoldedResiduals[i + 3] = r3 >= 0 ? (r3 << 1) : ((-r3 << 1) - 1);
+      i += 4;
+    }
+
+    while (i < length) {
+      final residual = residuals[i];
+      outFoldedResiduals[i] =
+          residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
+      i++;
     }
   }
 
   List<double>? _computeAutocorrelation(Samples channel, int maxOrder) {
     final r = List<double>.filled(maxOrder + 1, 0.0, growable: false);
-    
+
     for (int lag = 0; lag <= maxOrder; lag++) {
       double sum = 0.0;
-      
+
       for (int i = lag; i < channel.length; i++) {
         sum += channel[i] * channel[i - lag];
       }
-      
+
       r[lag] = sum;
     }
 
@@ -937,190 +908,6 @@ class _FixedPredictorDecision {
     required this.residuals,
     required this.estimatedBits,
   });
-}
-
-Uint8List _encodeFrameTask(_FrameEncodeTask task) {
-  final encoder = FlacEncoder();
-  encoder._activeConfig = task.config;
-  try {
-    return encoder._encode(task.channels, task.frameNumber);
-  } finally {
-    encoder._activeConfig = null;
-  }
-}
-
-TransferableTypedData _encodeTransferableFrameTask(
-  _TransferableFrameEncodeTask task,
-) {
-  final channels = <Samples>[
-    for (final channel in task.channels)
-      Int32List.view(channel.materialize()),
-  ];
-
-  final encoder = FlacEncoder();
-  encoder._activeConfig = task.config;
-  try {
-    final encoded = encoder._encode(channels, task.frameNumber);
-    return TransferableTypedData.fromList([encoded]);
-  } finally {
-    encoder._activeConfig = null;
-  }
-}
-
-class _IndexedTransferableEncodedFrame {
-  final int frameIndex;
-  final TransferableTypedData bytes;
-
-  const _IndexedTransferableEncodedFrame({
-    required this.frameIndex,
-    required this.bytes,
-  });
-}
-
-const _workerMessageEncode = 0;
-const _workerMessageClose = 1;
-const _workerResponseOk = 0;
-const _workerResponseError = 1;
-
-void _flacEncodeWorkerMain(SendPort readyPort) {
-  final commandPort = ReceivePort();
-  readyPort.send(commandPort.sendPort);
-
-  commandPort.listen((dynamic message) {
-    if (message is! List || message.isEmpty) {
-      return;
-    }
-
-    final messageType = message[0];
-    if (messageType == _workerMessageEncode) {
-      final frameIndex = message[1] as int;
-      final task = message[2] as _TransferableFrameEncodeTask;
-      final replyPort = message[3] as SendPort;
-      try {
-        final encoded = _encodeTransferableFrameTask(task);
-        replyPort.send([_workerResponseOk, frameIndex, encoded]);
-      } catch (error, stackTrace) {
-        replyPort.send([
-          _workerResponseError,
-          frameIndex,
-          error.toString(),
-          stackTrace.toString(),
-        ]);
-      }
-      return;
-    }
-
-    if (messageType == _workerMessageClose) {
-      final replyPort = message[1] as SendPort;
-      replyPort.send(true);
-      commandPort.close();
-    }
-  });
-}
-
-class _FlacWorkerPool {
-  final List<_FlacWorkerClient> _workers;
-  int _nextWorkerIndex = 0;
-  bool _closed = false;
-
-  _FlacWorkerPool._(this._workers);
-
-  static Future<_FlacWorkerPool> spawn(int workerCount) async {
-    final workers = <_FlacWorkerClient>[];
-    for (int i = 0; i < workerCount; i++) {
-      workers.add(await _FlacWorkerClient.spawn(i));
-    }
-    return _FlacWorkerPool._(workers);
-  }
-
-  Future<List<_IndexedTransferableEncodedFrame>> encodeTasks(
-    List<_TransferableFrameEncodeTask> tasks,
-  ) async {
-    if (_closed) {
-      throw StateError('Flac worker pool is already closed.');
-    }
-
-    final futures = <Future<_IndexedTransferableEncodedFrame>>[];
-    for (int i = 0; i < tasks.length; i++) {
-      final worker = _workers[_nextWorkerIndex];
-      _nextWorkerIndex = (_nextWorkerIndex + 1) % _workers.length;
-      futures.add(worker.encodeFrame(i, tasks[i]));
-    }
-
-    return Future.wait(futures);
-  }
-
-  Future<void> close() async {
-    if (_closed) {
-      return;
-    }
-    _closed = true;
-    await Future.wait([
-      for (final worker in _workers) worker.close(),
-    ]);
-  }
-}
-
-class _FlacWorkerClient {
-  final Isolate _isolate;
-  final SendPort _commandPort;
-  bool _closed = false;
-
-  _FlacWorkerClient._(this._isolate, this._commandPort);
-
-  static Future<_FlacWorkerClient> spawn(int workerIndex) async {
-    final readyPort = ReceivePort();
-    final isolate = await Isolate.spawn<SendPort>(
-      _flacEncodeWorkerMain,
-      readyPort.sendPort,
-      debugName: 'flac-encode-worker-$workerIndex',
-    );
-    final commandPort = await readyPort.first as SendPort;
-    readyPort.close();
-    return _FlacWorkerClient._(isolate, commandPort);
-  }
-
-  Future<_IndexedTransferableEncodedFrame> encodeFrame(
-    int frameIndex,
-    _TransferableFrameEncodeTask task,
-  ) async {
-    if (_closed) {
-      throw StateError('Flac worker is already closed.');
-    }
-
-    final responsePort = ReceivePort();
-    _commandPort.send([_workerMessageEncode, frameIndex, task, responsePort.sendPort]);
-
-    final response = await responsePort.first as List<dynamic>;
-    responsePort.close();
-
-    final status = response[0];
-    if (status == _workerResponseOk) {
-      return _IndexedTransferableEncodedFrame(
-        frameIndex: response[1] as int,
-        bytes: response[2] as TransferableTypedData,
-      );
-    }
-
-    final frame = response[1];
-    final error = response.length > 2 ? response[2] : 'unknown error';
-    final stack = response.length > 3 ? response[3] : '';
-    throw StateError('Worker failed on frame $frame: $error\n$stack');
-  }
-
-  Future<void> close() async {
-    if (_closed) {
-      return;
-    }
-    _closed = true;
-
-    final ackPort = ReceivePort();
-    _commandPort.send([_workerMessageClose, ackPort.sendPort]);
-    await ackPort.first;
-    ackPort.close();
-
-    _isolate.kill(priority: Isolate.immediate);
-  }
 }
 
 typedef _FrameEncodeTask = ({
