@@ -510,38 +510,48 @@ class FlacEncoder {
     int order,
     Int32List outResiduals,
   ) {
-    int outIndex = 0;
-    for (int i = order; i < channel.length; i++) {
-      final sample = channel[i];
-      int prediction;
+    final channelLength = channel.length;
 
-      switch (order) {
-        case 0:
-          prediction = 0;
-          break;
-        case 1:
-          prediction = channel[i - 1];
-          break;
-        case 2:
-          prediction = 2 * channel[i - 1] - channel[i - 2];
-          break;
-        case 3:
-          prediction = 3 * channel[i - 1] - 3 * channel[i - 2] + channel[i - 3];
-          break;
-        case 4:
-          prediction = 4 * channel[i - 1] -
-              6 * channel[i - 2] +
-              4 * channel[i - 3] -
+    switch (order) {
+      case 0:
+        for (int i = 0; i < channelLength; i++) {
+          outResiduals[i] = channel[i];
+        }
+        return channelLength;
+      case 1:
+        int outIndex = 0;
+        for (int i = 1; i < channelLength; i++) {
+          outResiduals[outIndex++] = channel[i] - channel[i - 1];
+        }
+        return outIndex;
+      case 2:
+        int outIndex = 0;
+        for (int i = 2; i < channelLength; i++) {
+          outResiduals[outIndex++] = channel[i] - 2 * channel[i - 1] + channel[i - 2];
+        }
+        return outIndex;
+      case 3:
+        int outIndex = 0;
+        for (int i = 3; i < channelLength; i++) {
+          outResiduals[outIndex++] = channel[i] -
+              3 * channel[i - 1] +
+              3 * channel[i - 2] -
+              channel[i - 3];
+        }
+        return outIndex;
+      case 4:
+        int outIndex = 0;
+        for (int i = 4; i < channelLength; i++) {
+          outResiduals[outIndex++] = channel[i] -
+              4 * channel[i - 1] +
+              6 * channel[i - 2] -
+              4 * channel[i - 3] +
               channel[i - 4];
-          break;
-        default:
-          throw ArgumentError.value(order, 'order', 'unsupported fixed order');
-      }
-
-      outResiduals[outIndex++] = sample - prediction;
+        }
+        return outIndex;
+      default:
+        throw ArgumentError.value(order, 'order', 'unsupported fixed order');
     }
-
-    return outIndex;
   }
 
   int _chooseRiceParameter(Int32List foldedResiduals, int length) {
