@@ -41,12 +41,6 @@ class FlacEncoder {
   // Frame header block-size code: read 16-bit (blocksize - 1) after coded number.
   static const _frameBlockSizeCode = 0x7;
 
-  // Frame header sample-rate code for 44.1kHz.
-  static const _frameSampleRateCode = 0x9;
-
-  // Frame header bit-depth code for 16-bit samples.
-  static const _frameBitDepthCode = 0x4;
-
   // Subframe header byte for constant samples (no wasted bits).
   static const _constantSubframeHeader = 0x00;
 
@@ -257,16 +251,18 @@ class FlacEncoder {
 
     final channels = samples.length;
     final blockSize = samples.first.length;
+    final sampleRateHeader = _resolveFrameSampleRateHeader(_config.sampleRate);
+    final frameBitDepthCode = _resolveFrameBitDepthCode(_config.bitsPerSample);
 
     // 0xFFF8:
     // sync code + reserved bit + fixed-blocksize strategy.
     header.add(const [0xFF, 0xF8]);
 
     // 4 bits block size code + 4 bits sample rate code.
-    header.addByte((_frameBlockSizeCode << 4) | _frameSampleRateCode);
+    header.addByte((_frameBlockSizeCode << 4) | sampleRateHeader.code);
 
     // 4 bits channel assignment + 3 bits bit depth code + reserved bit.
-    header.addByte(((channels - 1) << 4) | (_frameBitDepthCode << 1));
+    header.addByte(((channels - 1) << 4) | (frameBitDepthCode << 1));
 
     // In fixed-blocksize mode, this coded number is the frame number.
     header.add(_encodeFrameNumber(frameNumber));
@@ -275,6 +271,7 @@ class FlacEncoder {
     final encodedBlockSize = blockSize - 1;
     header.addByte((encodedBlockSize >> 8) & 0xFF);
     header.addByte(encodedBlockSize & 0xFF);
+    header.add(sampleRateHeader.extraBytes);
 
     final headerBytes = header.toBytes();
     final headerCrc = calculateCRC8(headerBytes);
@@ -316,6 +313,84 @@ class FlacEncoder {
     frame.addByte(frameCrc16 & 0xFF);
 
     return frame.toBytes();
+  }
+
+  ({int code, List<int> extraBytes}) _resolveFrameSampleRateHeader(
+    int sampleRate,
+  ) {
+    // Prefer compact standard FLAC header codes when available.
+    switch (sampleRate) {
+      case 8000:
+        return (code: 0x4, extraBytes: const []);
+      case 16000:
+        return (code: 0x5, extraBytes: const []);
+      case 22050:
+        return (code: 0x6, extraBytes: const []);
+      case 24000:
+        return (code: 0x7, extraBytes: const []);
+      case 32000:
+        return (code: 0x8, extraBytes: const []);
+      case 44100:
+        return (code: 0x9, extraBytes: const []);
+      case 48000:
+        return (code: 0xA, extraBytes: const []);
+      case 88200:
+        return (code: 0x1, extraBytes: const []);
+      case 96000:
+        return (code: 0xB, extraBytes: const []);
+      case 176400:
+        return (code: 0x2, extraBytes: const []);
+      case 192000:
+        return (code: 0x3, extraBytes: const []);
+    }
+
+    // 8-bit sample rate in kHz, written at the end of the frame header.
+    if (sampleRate > 0 && sampleRate % 1000 == 0) {
+      final rateInKhz = sampleRate ~/ 1000;
+      if (rateInKhz <= 0xFF) {
+        return (code: 0xC, extraBytes: [rateInKhz]);
+      }
+    }
+
+    // 16-bit sample rate in Hz, written at the end of the frame header.
+    if (sampleRate > 0 && sampleRate <= 0xFFFF) {
+      return (
+        code: 0xD,
+        extraBytes: [
+          (sampleRate >> 8) & 0xFF,
+          sampleRate & 0xFF,
+        ],
+      );
+    }
+
+    // 16-bit sample rate in tens of Hz, written at the end of the frame header.
+    if (sampleRate > 0 && sampleRate % 10 == 0) {
+      final rateInTensOfHz = sampleRate ~/ 10;
+      if (rateInTensOfHz <= 0xFFFF) {
+        return (
+          code: 0xE,
+          extraBytes: [
+            (rateInTensOfHz >> 8) & 0xFF,
+            rateInTensOfHz & 0xFF,
+          ],
+        );
+      }
+    }
+
+    // Fall back to STREAMINFO as required by FLAC when no compact code fits.
+    return (code: 0x0, extraBytes: const []);
+  }
+
+  int _resolveFrameBitDepthCode(int bitsPerSample) {
+    return switch (bitsPerSample) {
+      8 => 0x1,
+      12 => 0x2,
+      16 => 0x4,
+      20 => 0x5,
+      24 => 0x6,
+      32 => 0x7,
+      _ => 0x0, // from STREAMINFO
+    };
   }
 
   bool _isConstantChannel(Samples channel) {
