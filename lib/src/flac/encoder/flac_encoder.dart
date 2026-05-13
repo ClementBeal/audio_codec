@@ -7,6 +7,7 @@ import 'package:audio_codec/src/flac/flac_decoder.dart';
 import 'package:audio_codec/src/utils/bit_writer.dart';
 import 'package:audio_codec/src/utils/crc/crc16.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
+import 'package:crypto/crypto.dart';
 
 part 'flac_encoder_parallel.dart';
 
@@ -241,8 +242,33 @@ class FlacEncoder {
       streamInfo[10 + i] = (packed >> ((7 - i) * 8)) & 0xFF;
     }
 
-    // Last 16 bytes (PCM MD5) are left as zero for now.
+    final md5Signature = _computePcmMd5(samples);
+    streamInfo.setRange(18, 34, md5Signature);
+
     bytes.add(streamInfo);
+  }
+
+  Uint8List _computePcmMd5(List<Samples> samples) {
+    final channelCount = samples.length;
+    if (channelCount == 0) {
+      return Uint8List.fromList(md5.convert(const <int>[]).bytes);
+    }
+
+    final bytesPerSample = (_config.bitsPerSample + 7) >> 3;
+    final totalSamples = samples.first.length;
+    final pcm = Uint8List(totalSamples * channelCount * bytesPerSample);
+
+    int offset = 0;
+    for (int sampleIndex = 0; sampleIndex < totalSamples; sampleIndex++) {
+      for (int channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+        final sample = samples[channelIndex][sampleIndex];
+        for (int byteIndex = 0; byteIndex < bytesPerSample; byteIndex++) {
+          pcm[offset++] = (sample >> (8 * byteIndex)) & 0xFF;
+        }
+      }
+    }
+
+    return Uint8List.fromList(md5.convert(pcm).bytes);
   }
 
   Uint8List _encode(List<Samples> samples, int frameNumber) {
