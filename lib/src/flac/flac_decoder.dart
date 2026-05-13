@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audio_codec/src/utils/buffer.dart';
+import 'package:audio_codec/src/utils/crc/crc16.dart';
 import 'package:audio_codec/src/utils/crc/crc8.dart';
 import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
@@ -292,7 +293,7 @@ class FlacDecoder {
     // ignore: unused_local_variable
     final frameCRC = frameCRCBytes[0] << 8 | frameCRCBytes[1];
     // ignore: unused_local_variable
-    final calculatedFrameCRC = _calculateCRC16(bytes);
+    final calculatedFrameCRC = calculateCRC16(bytes);
 
     // if (frameCRC != calculatedFrameCRC) {
     //   throw Exception(
@@ -553,24 +554,6 @@ class FlacDecoder {
         }
       }
     }
-  }
-
-  int _calculateCRC16(List<int> data) {
-    int crc = 0; // Initial value
-
-    for (int byte in data) {
-      crc ^= (byte << 8); // XOR byte into the high byte of CRC
-      for (int i = 0; i < 8; i++) {
-        if ((crc & 0x8000) != 0) {
-          crc = (crc << 1) ^
-              0x1021; // Apply polynomial 0x1021 (x^16 + x^12 + x^5 + 1)
-        } else {
-          crc <<= 1;
-        }
-      }
-    }
-
-    return crc & 0xFFFF; // Ensure 16-bit result
   }
 
   (int, List<int>) _decodeCodedNumber() {
