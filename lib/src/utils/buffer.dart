@@ -66,7 +66,7 @@ class Buffer {
     if (_randomAccessFile == null) {
       throw StateError('This buffer is memory-backed and has no file source.');
     }
-    return _randomAccessFile!;
+    return _randomAccessFile;
   }
 
   int get bufferedBytes => _bufferedBytes;
@@ -75,13 +75,13 @@ class Buffer {
   /// Reset the [_cursor] on 0
   bool _fill() {
     if (_randomAccessFile != null) {
-      _bufferedBytes = _randomAccessFile!.readIntoSync(_buffer);
+      _bufferedBytes = _randomAccessFile.readIntoSync(_buffer);
       _cursor = 0;
       return _bufferedBytes > 0;
     }
 
     if (_sourceBytes != null) {
-      final bytes = _sourceBytes!;
+      final bytes = _sourceBytes;
       if (_sourceOffset >= bytes.length) {
         _bufferedBytes = 0;
         _cursor = 0;
@@ -97,10 +97,17 @@ class Buffer {
       return _bufferedBytes > 0;
     }
 
+    final nextChunk = _nextChunk;
+    if (nextChunk == null) {
+      _bufferedBytes = 0;
+      _cursor = 0;
+      return false;
+    }
+
     int written = 0;
     while (written < bufferedFile) {
       if (_chunkBufferCursor >= _chunkBuffer.length) {
-        final chunk = _nextChunk!.call();
+        final chunk = nextChunk();
         if (chunk == null) {
           break;
         }
@@ -145,7 +152,7 @@ class Buffer {
         result.setAll(0, _buffer.sublist(_cursor, _cursor + remaining));
       }
 
-      _randomAccessFile!.readIntoSync(result, remaining);
+      _randomAccessFile.readIntoSync(result, remaining);
       _fill();
 
       return result;
@@ -195,13 +202,13 @@ class Buffer {
   /// Refill the buffer
   void setPositionSync(int position) {
     if (_randomAccessFile != null) {
-      _randomAccessFile!.setPositionSync(position);
+      _randomAccessFile.setPositionSync(position);
       _fill();
       return;
     }
 
     if (_sourceBytes != null) {
-      final bytesLength = _sourceBytes!.length;
+      final bytesLength = _sourceBytes.length;
       if (position < 0 || position > bytesLength) {
         throw RangeError.range(position, 0, bytesLength, 'position');
       }
@@ -229,16 +236,16 @@ class Buffer {
       if (_randomAccessFile != null) {
         // Calculate the actual file position we need to skip to
         int currentPosition =
-            _randomAccessFile!.positionSync() - remainingInBuffer;
+            _randomAccessFile.positionSync() - remainingInBuffer;
         // Skip to the new position
-        _randomAccessFile!.setPositionSync(currentPosition + length);
+        _randomAccessFile.setPositionSync(currentPosition + length);
         // Refill the buffer at the new position/source offset
         _fill();
         return;
       }
 
       if (_sourceBytes != null) {
-        final int bytesLength = _sourceBytes!.length;
+        final int bytesLength = _sourceBytes.length;
         final int skipOutsideBuffer = length - remainingInBuffer;
         int nextSourceOffset = _sourceOffset + skipOutsideBuffer;
         if (nextSourceOffset > bytesLength) {

@@ -40,7 +40,10 @@ void main() {
     bitDepth: result.streamInfoBlock!.bitsPerSample,
   ).encode(
     File("output.wav"),
-    pcmSamples,
+    interleavedPcmToLittleEndianBytes(
+      pcmSamples,
+      result.streamInfoBlock!.bitsPerSample,
+    ),
   );
 }
 
@@ -59,4 +62,36 @@ void writeFrameToPcm(
       samples[frameStart + i * numChannels + c] = frame.subframes[c][i];
     }
   }
+}
+
+Uint8List interleavedPcmToLittleEndianBytes(Int32List samples, int bitDepth) {
+  if (bitDepth % 8 != 0) {
+    throw ArgumentError('Bit depth must be a multiple of 8');
+  }
+
+  final bytesPerSample = bitDepth ~/ 8;
+  final output = Uint8List(samples.length * bytesPerSample);
+  final buffer = ByteData.sublistView(output);
+
+  for (var i = 0; i < samples.length; i++) {
+    final offset = i * bytesPerSample;
+    final sample = samples[i];
+
+    switch (bytesPerSample) {
+      case 1:
+        buffer.setInt8(offset, sample);
+      case 2:
+        buffer.setInt16(offset, sample, Endian.little);
+      case 3:
+        buffer.setUint8(offset, sample & 0xFF);
+        buffer.setUint8(offset + 1, (sample >> 8) & 0xFF);
+        buffer.setUint8(offset + 2, (sample >> 16) & 0xFF);
+      case 4:
+        buffer.setInt32(offset, sample, Endian.little);
+      default:
+        throw UnsupportedError('Unsupported bit depth: $bitDepth');
+    }
+  }
+
+  return output;
 }
