@@ -445,15 +445,17 @@ class FlacEncoder {
         : channel.length;
 
     for (int order = 0; order <= maxOrder; order++) {
-      final residualLength = _computeFixedResidualsInto(channel, order, _residualScratch);
+      final residualLength =
+          _computeFixedResidualsInto(channel, order, _residualScratch);
       _foldResidualsInto(
-                _residualScratch,
-                residualLength,
-                _foldedResidualScratch,
-              );
-      final riceParameter = _chooseRiceParameter(_foldedResidualScratch, residualLength);
-      final estimatedBits = _estimateFixedSubframeBitCount(
-              order, residualLength, riceParameter);
+        _residualScratch,
+        residualLength,
+        _foldedResidualScratch,
+      );
+      final riceParameter =
+          _chooseRiceParameter(_foldedResidualScratch, residualLength);
+      final estimatedBits =
+          _estimateFixedSubframeBitCount(order, residualLength, riceParameter);
 
       if (estimatedBits >= verbatimBits) {
         continue;
