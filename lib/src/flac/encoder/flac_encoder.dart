@@ -1,3 +1,39 @@
+// Protocol section: Native FLAC stream (RFC 9639)
+// Bytes: file-level layout
+// Layout:
+// AAAAAAAA BBBBBBBB CCCCCCCC DDDDDDDD
+// Meaning:
+// - A..D: ASCII "fLaC" stream marker.
+// - Then one or more metadata blocks, starting with mandatory STREAMINFO.
+// - Then a sequence of audio frames.
+//
+// Protocol section: Metadata block header
+// Bytes: per metadata block, 0..3
+// Layout:
+// ABBBBBBB CCCCCCCC DDDDDDDD EEEEEEEE
+// Meaning:
+// - A: is_last_metadata_block, 1 bit.
+// - B: block type, 7 bits (STREAMINFO = 0).
+// - C..E: metadata payload length, 24-bit big-endian.
+// Constraints:
+// - STREAMINFO payload length is exactly 34 bytes.
+//
+// Protocol section: Frame header prefix and checksums
+// Bytes: per frame, header then subframes then footer
+// Layout:
+// 11111111 11111RSB AAAABBBB CCCCDDDR [coded_number...] [extras...] HHHHHHHH
+// Meaning:
+// - R: reserved bit, must be 0.
+// - S: blocking strategy (0 fixed-blocksize, 1 variable-blocksize).
+// - B: block-size code, 4 bits.
+// - A: sample-rate code, 4 bits.
+// - C: channel assignment, 4 bits.
+// - D: bits-per-sample code, 3 bits.
+// - Final R: reserved bit, must be 0.
+// - H: CRC-8 over frame header bytes before CRC-8 itself.
+// Constraints:
+// - Channel assignment must match FLAC 1..8 channel semantics.
+// - Frame payload ends on a byte boundary, then CRC-16 is appended.
 import 'dart:io' show Platform;
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -29,7 +65,23 @@ class FlacEncoderConfig {
     this.maxLpcOrder = 8,
     this.lpcCoefficientPrecision = 12,
     this.frameParallelism = 0,
-  }) : assert(frameParallelism >= 0, 'frameParallelism must be >= 0');
+  })  : assert(frameParallelism >= 0, 'frameParallelism must be >= 0'),
+        assert(frameBlockSize > 0, 'frameBlockSize must be > 0'),
+        assert(frameBlockSize <= 0xFFFF, 'frameBlockSize must be <= 65535'),
+        assert(sampleRate > 0, 'sampleRate must be > 0'),
+        assert(sampleRate <= 0xFFFFF, 'sampleRate must be <= 1048575'),
+        assert(bitsPerSample >= 4, 'bitsPerSample must be >= 4'),
+        assert(bitsPerSample <= 32, 'bitsPerSample must be <= 32'),
+        assert(
+            maxFixedPredictorOrder >= 0, 'maxFixedPredictorOrder must be >= 0'),
+        assert(
+            maxFixedPredictorOrder <= 4, 'maxFixedPredictorOrder must be <= 4'),
+        assert(maxLpcOrder >= 0, 'maxLpcOrder must be >= 0'),
+        assert(maxLpcOrder <= 32, 'maxLpcOrder must be <= 32'),
+        assert(lpcCoefficientPrecision >= 1,
+            'lpcCoefficientPrecision must be >= 1'),
+        assert(lpcCoefficientPrecision <= 15,
+            'lpcCoefficientPrecision must be <= 15');
 }
 
 class FlacEncoder {
@@ -47,6 +99,19 @@ class FlacEncoder {
 
   // Subframe header byte for verbatim samples (no wasted bits).
   static const _verbatimSubframeHeader = 0x02;
+
+  static const _minFlacChannels = 1;
+  static const _maxFlacChannels = 8;
+  static const _minFlacBitsPerSample = 4;
+  static const _maxFlacBitsPerSample = 32;
+  static const _minFlacSampleRate = 1;
+  static const _maxFlacSampleRate = 0xFFFFF;
+  static const _maxFlacBlockSize = 0xFFFF;
+  static const _maxFlacFixedPredictorOrder = 4;
+  static const _maxFlacLpcOrder = 32;
+  static const _minFlacQlpPrecision = 1;
+  static const _maxFlacQlpPrecision = 15;
+  static const _maxFlacTotalSamples = 0xFFFFFFFFF; // 36-bit STREAMINFO field.
 
   FlacEncoderConfig? _activeConfig;
   Int32List _residualScratch = Int32List(0);
@@ -66,6 +131,7 @@ class FlacEncoder {
     List<Samples> samples, {
     required FlacEncoderConfig config,
   }) {
+    _validateEncoderInput(samples, config);
     _activeConfig = config;
     try {
       final bytes = BytesBuilder(copy: false);
@@ -92,6 +158,7 @@ class FlacEncoder {
     List<Samples> samples, {
     required FlacEncoderConfig config,
   }) async {
+    _validateEncoderInput(samples, config);
     _activeConfig = config;
     try {
       final bytes = BytesBuilder(copy: false);
@@ -145,6 +212,112 @@ class FlacEncoder {
     _workerPoolSize = 0;
     if (workerPool != null) {
       await workerPool.close();
+    }
+  }
+
+  void _validateEncoderInput(List<Samples> samples, FlacEncoderConfig config) {
+    _validateConfig(config);
+    _validateSampleMatrix(samples, config.bitsPerSample);
+  }
+
+  void _validateConfig(FlacEncoderConfig config) {
+    if (config.frameParallelism < 0) {
+      throw RangeError.value(
+        config.frameParallelism,
+        'frameParallelism',
+        'must be >= 0',
+      );
+    }
+    if (config.frameBlockSize < 1 ||
+        config.frameBlockSize > _maxFlacBlockSize) {
+      throw RangeError.value(
+        config.frameBlockSize,
+        'frameBlockSize',
+        'must be in [1, $_maxFlacBlockSize]',
+      );
+    }
+    if (config.sampleRate < _minFlacSampleRate ||
+        config.sampleRate > _maxFlacSampleRate) {
+      throw RangeError.value(
+        config.sampleRate,
+        'sampleRate',
+        'must be in [$_minFlacSampleRate, $_maxFlacSampleRate]',
+      );
+    }
+    if (config.bitsPerSample < _minFlacBitsPerSample ||
+        config.bitsPerSample > _maxFlacBitsPerSample) {
+      throw RangeError.value(
+        config.bitsPerSample,
+        'bitsPerSample',
+        'must be in [$_minFlacBitsPerSample, $_maxFlacBitsPerSample]',
+      );
+    }
+    if (config.maxFixedPredictorOrder < 0 ||
+        config.maxFixedPredictorOrder > _maxFlacFixedPredictorOrder) {
+      throw RangeError.value(
+        config.maxFixedPredictorOrder,
+        'maxFixedPredictorOrder',
+        'must be in [0, $_maxFlacFixedPredictorOrder]',
+      );
+    }
+    if (config.maxLpcOrder < 0 || config.maxLpcOrder > _maxFlacLpcOrder) {
+      throw RangeError.value(
+        config.maxLpcOrder,
+        'maxLpcOrder',
+        'must be in [0, $_maxFlacLpcOrder]',
+      );
+    }
+    if (config.lpcCoefficientPrecision < _minFlacQlpPrecision ||
+        config.lpcCoefficientPrecision > _maxFlacQlpPrecision) {
+      throw RangeError.value(
+        config.lpcCoefficientPrecision,
+        'lpcCoefficientPrecision',
+        'must be in [$_minFlacQlpPrecision, $_maxFlacQlpPrecision]',
+      );
+    }
+  }
+
+  void _validateSampleMatrix(List<Samples> samples, int bitsPerSample) {
+    if (samples.length < _minFlacChannels ||
+        samples.length > _maxFlacChannels) {
+      throw RangeError.value(
+        samples.length,
+        'samples.length',
+        'must be in [$_minFlacChannels, $_maxFlacChannels]',
+      );
+    }
+
+    final totalSamples = samples.first.length;
+    if (totalSamples > _maxFlacTotalSamples) {
+      throw RangeError.value(
+        totalSamples,
+        'samples.first.length',
+        'must be <= $_maxFlacTotalSamples (36-bit STREAMINFO limit)',
+      );
+    }
+
+    final minSampleValue = -(1 << (bitsPerSample - 1));
+    final maxSampleValue = (1 << (bitsPerSample - 1)) - 1;
+
+    for (int channelIndex = 0; channelIndex < samples.length; channelIndex++) {
+      final channel = samples[channelIndex];
+      if (channel.length != totalSamples) {
+        throw ArgumentError(
+          'All channels must have the same sample count. '
+          'Channel 0 has $totalSamples samples, '
+          'channel $channelIndex has ${channel.length}.',
+        );
+      }
+      for (int sampleIndex = 0; sampleIndex < channel.length; sampleIndex++) {
+        final sample = channel[sampleIndex];
+        if (sample < minSampleValue || sample > maxSampleValue) {
+          throw RangeError(
+            'Sample out of range for $bitsPerSample-bit FLAC: '
+            'channel $channelIndex sample $sampleIndex = $sample '
+            'not in [$minSampleValue, $maxSampleValue].',
+          );
+        }
+      }
     }
   }
 
@@ -229,6 +402,13 @@ class FlacEncoder {
 
     // Total number of inter-channel samples declared in the stream.
     final totalSamples = samples.first.length;
+    if (totalSamples > _maxFlacTotalSamples) {
+      throw RangeError.value(
+        totalSamples,
+        'totalSamples',
+        'must be <= $_maxFlacTotalSamples (36-bit STREAMINFO field)',
+      );
+    }
 
     // STREAMINFO 64-bit packed field:
     // [sampleRate:20][channels-1:3][bitsPerSample-1:5][totalSamples:36]
