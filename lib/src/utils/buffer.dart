@@ -3,6 +3,19 @@ import 'dart:typed_data';
 
 typedef NextChunk = Uint8List? Function();
 
+/// Protocol section: bitstream cursor
+/// Layout inside each byte:
+/// ABCDEFGH
+/// Meaning:
+/// - A: first bit read from the byte, bit 7 / most significant bit.
+/// - H: last bit read from the byte, bit 0 / least significant bit.
+/// Constraints:
+/// - `_cursor` points to the current byte in `_buffer`.
+/// - `_bitCount` is the next bit index to read and must stay in `7..0`.
+/// - When `_cursor == _bufferedBytes`, the buffer must be refilled before
+///   reading `_buffer[_cursor]`.
+/// - EOF while reading bits is deterministic and reported as `StateError`.
+///
 /// A buffered file that minimize the IO
 class Buffer {
   final RandomAccessFile? _randomAccessFile;
@@ -278,11 +291,19 @@ class Buffer {
 
   /// Reads a single bit and returns it as an unsigned integer (0 or 1).
   int readBit() {
+    if (!_ensureReadableByte()) {
+      throw StateError('Unexpected end of buffer while reading bit');
+    }
+
     final int bit = (_buffer[_cursor] >> _bitCount) & 1;
     _bitCount -= 1;
     _updateBitCursor();
 
     return bit;
+  }
+
+  bool _ensureReadableByte() {
+    return _cursor < _bufferedBytes || _fill();
   }
 
   void _updateBitCursor() {
@@ -300,9 +321,8 @@ class Buffer {
     int bitsRemaining = bitCount;
 
     while (bitsRemaining > 0) {
-      // If we need to refill the buffer
-      if (_cursor >= _bufferedBytes) {
-        _fill();
+      if (!_ensureReadableByte()) {
+        throw StateError('Unexpected end of buffer while reading bits');
       }
 
       // Calculate how many bits we can read from current byte

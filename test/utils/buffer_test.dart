@@ -114,6 +114,20 @@ void main() {
       expect(buffer.readBit(), equals(0));
     });
 
+    test('readBit - refills before reading across buffer boundary', () async {
+      final data = Uint8List(Buffer.bufferedFile + 1);
+      data[Buffer.bufferedFile] = 0x80;
+      await tempFile.writeAsBytes(data);
+
+      buffer = Buffer(randomAccessFile: await tempFile.open());
+
+      for (var i = 0; i < Buffer.bufferedFile * 8; i++) {
+        expect(buffer.readBit(), equals(0));
+      }
+
+      expect(buffer.readBit(), equals(1));
+    });
+
     test('readUnsigned - read multiple bits as unsigned integer', () async {
       // 01101000 11010001 01101000
       final data = Uint8List.fromList([0x68, 0xD1, 0x68]);
