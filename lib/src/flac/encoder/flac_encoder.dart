@@ -1,3 +1,39 @@
+// Protocol section: Native FLAC stream (RFC 9639)
+// Bytes: file-level layout
+// Layout:
+// AAAAAAAA BBBBBBBB CCCCCCCC DDDDDDDD
+// Meaning:
+// - A..D: ASCII "fLaC" stream marker.
+// - Then one or more metadata blocks, starting with mandatory STREAMINFO.
+// - Then a sequence of audio frames.
+//
+// Protocol section: Metadata block header
+// Bytes: per metadata block, 0..3
+// Layout:
+// ABBBBBBB CCCCCCCC DDDDDDDD EEEEEEEE
+// Meaning:
+// - A: is_last_metadata_block, 1 bit.
+// - B: block type, 7 bits (STREAMINFO = 0).
+// - C..E: metadata payload length, 24-bit big-endian.
+// Constraints:
+// - STREAMINFO payload length is exactly 34 bytes.
+//
+// Protocol section: Frame header prefix and checksums
+// Bytes: per frame, header then subframes then footer
+// Layout:
+// 11111111 11111RSB AAAABBBB CCCCDDDR [coded_number...] [extras...] HHHHHHHH
+// Meaning:
+// - R: reserved bit, must be 0.
+// - S: blocking strategy (0 fixed-blocksize, 1 variable-blocksize).
+// - B: block-size code, 4 bits.
+// - A: sample-rate code, 4 bits.
+// - C: channel assignment, 4 bits.
+// - D: bits-per-sample code, 3 bits.
+// - Final R: reserved bit, must be 0.
+// - H: CRC-8 over frame header bytes before CRC-8 itself.
+// Constraints:
+// - Channel assignment must match FLAC 1..8 channel semantics.
+// - Frame payload ends on a byte boundary, then CRC-16 is appended.
 import 'dart:io' show Platform;
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -18,6 +54,9 @@ class FlacEncoderConfig {
   final int maxFixedPredictorOrder;
   final int maxLpcOrder;
   final int lpcCoefficientPrecision;
+  // If fixed prediction already saves this fraction over verbatim, LPC search
+  // is skipped for that subframe. LPC can still be forced by setting this to 1.
+  final double lpcSearchFixedPredictorSkipGain;
   // 0 => auto (based on CPU count), 1 => sequential, >1 => fixed parallelism.
   final int frameParallelism;
 
@@ -28,8 +67,29 @@ class FlacEncoderConfig {
     this.maxFixedPredictorOrder = 4,
     this.maxLpcOrder = 8,
     this.lpcCoefficientPrecision = 12,
+    this.lpcSearchFixedPredictorSkipGain = 0.25,
     this.frameParallelism = 0,
-  }) : assert(frameParallelism >= 0, 'frameParallelism must be >= 0');
+  })  : assert(frameParallelism >= 0, 'frameParallelism must be >= 0'),
+        assert(frameBlockSize > 0, 'frameBlockSize must be > 0'),
+        assert(frameBlockSize <= 0xFFFF, 'frameBlockSize must be <= 65535'),
+        assert(sampleRate > 0, 'sampleRate must be > 0'),
+        assert(sampleRate <= 0xFFFFF, 'sampleRate must be <= 1048575'),
+        assert(bitsPerSample >= 4, 'bitsPerSample must be >= 4'),
+        assert(bitsPerSample <= 32, 'bitsPerSample must be <= 32'),
+        assert(
+            maxFixedPredictorOrder >= 0, 'maxFixedPredictorOrder must be >= 0'),
+        assert(
+            maxFixedPredictorOrder <= 4, 'maxFixedPredictorOrder must be <= 4'),
+        assert(maxLpcOrder >= 0, 'maxLpcOrder must be >= 0'),
+        assert(maxLpcOrder <= 32, 'maxLpcOrder must be <= 32'),
+        assert(lpcCoefficientPrecision >= 1,
+            'lpcCoefficientPrecision must be >= 1'),
+        assert(lpcCoefficientPrecision <= 15,
+            'lpcCoefficientPrecision must be <= 15'),
+        assert(lpcSearchFixedPredictorSkipGain >= 0,
+            'lpcSearchFixedPredictorSkipGain must be >= 0'),
+        assert(lpcSearchFixedPredictorSkipGain <= 1,
+            'lpcSearchFixedPredictorSkipGain must be <= 1');
 }
 
 class FlacEncoder {
@@ -47,6 +107,19 @@ class FlacEncoder {
 
   // Subframe header byte for verbatim samples (no wasted bits).
   static const _verbatimSubframeHeader = 0x02;
+
+  static const _minFlacChannels = 1;
+  static const _maxFlacChannels = 8;
+  static const _minFlacBitsPerSample = 4;
+  static const _maxFlacBitsPerSample = 32;
+  static const _minFlacSampleRate = 1;
+  static const _maxFlacSampleRate = 0xFFFFF;
+  static const _maxFlacBlockSize = 0xFFFF;
+  static const _maxFlacFixedPredictorOrder = 4;
+  static const _maxFlacLpcOrder = 32;
+  static const _minFlacQlpPrecision = 1;
+  static const _maxFlacQlpPrecision = 15;
+  static const _maxFlacTotalSamples = 0xFFFFFFFFF; // 36-bit STREAMINFO field.
 
   FlacEncoderConfig? _activeConfig;
   Int32List _residualScratch = Int32List(0);
@@ -66,6 +139,7 @@ class FlacEncoder {
     List<Samples> samples, {
     required FlacEncoderConfig config,
   }) {
+    _validateEncoderInput(samples, config);
     _activeConfig = config;
     try {
       final bytes = BytesBuilder(copy: false);
@@ -92,6 +166,7 @@ class FlacEncoder {
     List<Samples> samples, {
     required FlacEncoderConfig config,
   }) async {
+    _validateEncoderInput(samples, config);
     _activeConfig = config;
     try {
       final bytes = BytesBuilder(copy: false);
@@ -145,6 +220,120 @@ class FlacEncoder {
     _workerPoolSize = 0;
     if (workerPool != null) {
       await workerPool.close();
+    }
+  }
+
+  void _validateEncoderInput(List<Samples> samples, FlacEncoderConfig config) {
+    _validateConfig(config);
+    _validateSampleMatrix(samples, config.bitsPerSample);
+  }
+
+  void _validateConfig(FlacEncoderConfig config) {
+    if (config.frameParallelism < 0) {
+      throw RangeError.value(
+        config.frameParallelism,
+        'frameParallelism',
+        'must be >= 0',
+      );
+    }
+    if (config.frameBlockSize < 1 ||
+        config.frameBlockSize > _maxFlacBlockSize) {
+      throw RangeError.value(
+        config.frameBlockSize,
+        'frameBlockSize',
+        'must be in [1, $_maxFlacBlockSize]',
+      );
+    }
+    if (config.sampleRate < _minFlacSampleRate ||
+        config.sampleRate > _maxFlacSampleRate) {
+      throw RangeError.value(
+        config.sampleRate,
+        'sampleRate',
+        'must be in [$_minFlacSampleRate, $_maxFlacSampleRate]',
+      );
+    }
+    if (config.bitsPerSample < _minFlacBitsPerSample ||
+        config.bitsPerSample > _maxFlacBitsPerSample) {
+      throw RangeError.value(
+        config.bitsPerSample,
+        'bitsPerSample',
+        'must be in [$_minFlacBitsPerSample, $_maxFlacBitsPerSample]',
+      );
+    }
+    if (config.maxFixedPredictorOrder < 0 ||
+        config.maxFixedPredictorOrder > _maxFlacFixedPredictorOrder) {
+      throw RangeError.value(
+        config.maxFixedPredictorOrder,
+        'maxFixedPredictorOrder',
+        'must be in [0, $_maxFlacFixedPredictorOrder]',
+      );
+    }
+    if (config.maxLpcOrder < 0 || config.maxLpcOrder > _maxFlacLpcOrder) {
+      throw RangeError.value(
+        config.maxLpcOrder,
+        'maxLpcOrder',
+        'must be in [0, $_maxFlacLpcOrder]',
+      );
+    }
+    if (config.lpcCoefficientPrecision < _minFlacQlpPrecision ||
+        config.lpcCoefficientPrecision > _maxFlacQlpPrecision) {
+      throw RangeError.value(
+        config.lpcCoefficientPrecision,
+        'lpcCoefficientPrecision',
+        'must be in [$_minFlacQlpPrecision, $_maxFlacQlpPrecision]',
+      );
+    }
+    if (config.lpcSearchFixedPredictorSkipGain < 0 ||
+        config.lpcSearchFixedPredictorSkipGain > 1) {
+      throw RangeError.value(
+        config.lpcSearchFixedPredictorSkipGain,
+        'lpcSearchFixedPredictorSkipGain',
+        'must be in [0, 1]',
+      );
+    }
+  }
+
+  void _validateSampleMatrix(List<Samples> samples, int bitsPerSample) {
+    if (samples.length < _minFlacChannels ||
+        samples.length > _maxFlacChannels) {
+      throw RangeError.value(
+        samples.length,
+        'samples.length',
+        'must be in [$_minFlacChannels, $_maxFlacChannels]',
+      );
+    }
+
+    final totalSamples = samples.first.length;
+    if (totalSamples > _maxFlacTotalSamples) {
+      throw RangeError.value(
+        totalSamples,
+        'samples.first.length',
+        'must be <= $_maxFlacTotalSamples (36-bit STREAMINFO limit)',
+      );
+    }
+
+    final minSampleValue = -(1 << (bitsPerSample - 1));
+    final maxSampleValue = (1 << (bitsPerSample - 1)) - 1;
+
+    for (int channelIndex = 0; channelIndex < samples.length; channelIndex++) {
+      final channel = samples[channelIndex];
+      if (channel.length != totalSamples) {
+        throw ArgumentError(
+          'All channels must have the same sample count. '
+          'Channel 0 has $totalSamples samples, '
+          'channel $channelIndex has ${channel.length}.',
+        );
+      }
+      for (int sampleIndex = 0; sampleIndex < channel.length; sampleIndex++) {
+        final sample = channel[sampleIndex];
+        if (sample < minSampleValue || sample > maxSampleValue) {
+          throw RangeError(
+            'Sample out of range for $bitsPerSample-bit FLAC: '
+            'channel $channelIndex sample $sampleIndex = $sample '
+            'not in [$minSampleValue, $maxSampleValue].',
+          );
+        }
+      }
     }
   }
 
@@ -229,6 +418,13 @@ class FlacEncoder {
 
     // Total number of inter-channel samples declared in the stream.
     final totalSamples = samples.first.length;
+    if (totalSamples > _maxFlacTotalSamples) {
+      throw RangeError.value(
+        totalSamples,
+        'totalSamples',
+        'must be <= $_maxFlacTotalSamples (36-bit STREAMINFO field)',
+      );
+    }
 
     // STREAMINFO 64-bit packed field:
     // [sampleRate:20][channels-1:3][bitsPerSample-1:5][totalSamples:36]
@@ -272,8 +468,7 @@ class FlacEncoder {
   }
 
   Uint8List _encode(List<Samples> samples, int frameNumber) {
-    final frame = BytesBuilder(copy: false);
-    final header = BytesBuilder(copy: false);
+    final frame = BitWriter();
 
     final channels = samples.length;
     final blockSize = samples.first.length;
@@ -282,30 +477,27 @@ class FlacEncoder {
 
     // 0xFFF8:
     // sync code + reserved bit + fixed-blocksize strategy.
-    header.add(const [0xFF, 0xF8]);
+    frame.addBytes(const [0xFF, 0xF8]);
 
     // 4 bits block size code + 4 bits sample rate code.
-    header.addByte((_frameBlockSizeCode << 4) | sampleRateHeader.code);
+    frame.addByte((_frameBlockSizeCode << 4) | sampleRateHeader.code);
 
     // 4 bits channel assignment + 3 bits bit depth code + reserved bit.
-    header.addByte(((channels - 1) << 4) | (frameBitDepthCode << 1));
+    frame.addByte(((channels - 1) << 4) | (frameBitDepthCode << 1));
 
     // In fixed-blocksize mode, this coded number is the frame number.
-    header.add(_encodeFrameNumber(frameNumber));
+    frame.addBytes(_encodeFrameNumber(frameNumber));
 
     // Because we use block-size code 0x7, we append blockSize - 1 on 16 bits.
     final encodedBlockSize = blockSize - 1;
-    header.addByte((encodedBlockSize >> 8) & 0xFF);
-    header.addByte(encodedBlockSize & 0xFF);
-    header.add(sampleRateHeader.extraBytes);
+    frame.addByte((encodedBlockSize >> 8) & 0xFF);
+    frame.addByte(encodedBlockSize & 0xFF);
+    frame.addBytes(sampleRateHeader.extraBytes);
 
-    final headerBytes = header.toBytes();
-    final headerCrc = calculateCRC8(headerBytes);
-
-    frame.add(headerBytes);
+    final headerCrc = calculateCRC8Range(frame.rawBuffer, 0, frame.length);
     frame.addByte(headerCrc);
 
-    final subframeWriter = BitWriter(frame);
+    final subframeWriter = frame;
 
     // One subframe per channel:
     // - constant if all samples in the channel chunk are identical
@@ -316,7 +508,9 @@ class FlacEncoder {
         _writeConstantSubframe(subframeWriter, channel.first);
       } else {
         final fixedDecision = _chooseFixedPredictor(channel);
-        final lpcDecision = _chooseLpcPredictor(channel);
+        final lpcDecision = _shouldSearchLpc(channel, fixedDecision)
+            ? _chooseLpcPredictor(channel)
+            : null;
 
         if (fixedDecision != null &&
             (lpcDecision == null ||
@@ -333,8 +527,7 @@ class FlacEncoder {
     // Frame CRC16 must be byte-aligned.
     subframeWriter.alignToByte();
 
-    final frameBytesWithoutCrc16 = frame.toBytes();
-    final frameCrc16 = calculateCRC16(frameBytesWithoutCrc16);
+    final frameCrc16 = calculateCRC16Range(frame.rawBuffer, 0, frame.length);
     frame.addByte((frameCrc16 >> 8) & 0xFF);
     frame.addByte(frameCrc16 & 0xFF);
 
@@ -434,6 +627,40 @@ class FlacEncoder {
     return true;
   }
 
+  bool _shouldSearchLpc(
+    Samples channel,
+    _FixedPredictorDecision? fixedDecision,
+  ) {
+    if (_config.maxLpcOrder <= 0) {
+      return false;
+    }
+    if (fixedDecision == null) {
+      return true;
+    }
+
+    final verbatimBits = 8 + channel.length * _config.bitsPerSample;
+    final fixedSavings = verbatimBits - fixedDecision.estimatedBits;
+    if (fixedSavings <= 0) {
+      return true;
+    }
+
+    final fixedGain = fixedSavings / verbatimBits;
+
+    // Heuristic: LPC is much more expensive than fixed prediction because it
+    // runs autocorrelation, Levinson-Durbin, coefficient quantization, and
+    // residual scoring for each order. On the local 31 MB 44.1 kHz stereo
+    // benchmark, the post-Rice-optimization encoder is dominated by this LPC
+    // search. Skipping LPC when fixed prediction already saves 25% over
+    // verbatim keeps a useful compression check while avoiding many expensive
+    // searches. The default 25% threshold is deliberately conservative: the
+    // local benchmark showed that lower thresholds are faster but grow output
+    // size more aggressively. Risk: some material may compress smaller with LPC
+    // despite a good fixed predictor. Fallback: set
+    // lpcSearchFixedPredictorSkipGain to 1.0 to force the old exhaustive LPC
+    // search whenever fixed is profitable.
+    return fixedGain < _config.lpcSearchFixedPredictorSkipGain;
+  }
+
   _FixedPredictorDecision? _chooseFixedPredictor(Samples channel) {
     final verbatimBits = 8 + channel.length * _config.bitsPerSample;
 
@@ -447,15 +674,18 @@ class FlacEncoder {
     for (int order = 0; order <= maxOrder; order++) {
       final residualLength =
           _computeFixedResidualsInto(channel, order, _residualScratch);
-      _foldResidualsInto(
+      final residualAbsSum = _foldResidualsInto(
         _residualScratch,
         residualLength,
         _foldedResidualScratch,
       );
-      final riceParameter =
-          _chooseRiceParameter(_foldedResidualScratch, residualLength);
+      final riceCoding = _chooseRiceCoding(
+        _foldedResidualScratch,
+        residualLength,
+        residualAbsSum,
+      );
       final estimatedBits =
-          _estimateFixedSubframeBitCount(order, residualLength, riceParameter);
+          _estimateFixedSubframeBitCount(order, riceCoding.encodedBits);
 
       if (estimatedBits >= verbatimBits) {
         continue;
@@ -464,7 +694,7 @@ class FlacEncoder {
       if (best == null || estimatedBits < best.estimatedBits) {
         best = _FixedPredictorDecision(
           order: order,
-          riceParameter: riceParameter,
+          riceParameter: riceCoding.parameter,
           residuals: _copyInt32Prefix(_residualScratch, residualLength),
           estimatedBits: estimatedBits,
         );
@@ -529,18 +759,20 @@ class FlacEncoder {
 
       final residualLength =
           _computeLpcResidualsInto(channel, quantized, order, _residualScratch);
-      _foldResidualsInto(
+      final residualAbsSum = _foldResidualsInto(
         _residualScratch,
         residualLength,
         _foldedResidualScratch,
       );
-      final riceParameter =
-          _chooseRiceParameter(_foldedResidualScratch, residualLength);
+      final riceCoding = _chooseRiceCoding(
+        _foldedResidualScratch,
+        residualLength,
+        residualAbsSum,
+      );
       final estimatedBits = _estimateLpcSubframeBitCount(
         order,
-        residualLength,
-        riceParameter,
         quantized.precision,
+        riceCoding.encodedBits,
       );
 
       if (estimatedBits >= verbatimBits) {
@@ -550,7 +782,7 @@ class FlacEncoder {
       if (best == null || estimatedBits < best.estimatedBits) {
         best = (
           order: order,
-          riceParameter: riceParameter,
+          riceParameter: riceCoding.parameter,
           residuals: _copyInt32Prefix(_residualScratch, residualLength),
           estimatedBits: estimatedBits,
           qlpPrecision: quantized.precision,
@@ -613,17 +845,16 @@ class FlacEncoder {
     }
   }
 
-  int _chooseRiceParameter(Int32List foldedResiduals, int length) {
+  _RiceCodingDecision _chooseRiceCoding(
+    Int32List foldedResiduals,
+    int length,
+    int residualAbsSum,
+  ) {
     if (length == 0) {
-      return 0;
+      return (parameter: 0, encodedBits: 0);
     }
 
-    int sumAbs = 0;
-    for (int i = 0; i < length; i++) {
-      sumAbs += (foldedResiduals[i] + 1) >> 1;
-    }
-
-    final meanAbs = sumAbs / length;
+    final meanAbs = residualAbsSum / length;
     final estimated = meanAbs <= 0
         ? 0
         : (math.log(meanAbs * math.ln2) / math.ln2).round().clamp(0, 14);
@@ -631,75 +862,67 @@ class FlacEncoder {
     final candidateMin = estimated > 0 ? estimated - 1 : 0;
     final candidateMax = estimated < 14 ? estimated + 1 : 14;
 
-    int bestParameter = estimated;
-    int bestBits =
-        _estimateRiceBitsForParameter(foldedResiduals, length, estimated);
+    final parameter0 = candidateMin;
+    final parameter1 = candidateMin + 1;
+    final parameter2 = candidateMin + 2;
+    final hasParameter1 = parameter1 <= candidateMax;
+    final hasParameter2 = parameter2 <= candidateMax;
+    final fixedBits0 = 1 + parameter0;
+    final fixedBits1 = 1 + parameter1;
+    final fixedBits2 = 1 + parameter2;
 
-    for (int parameter = candidateMin; parameter <= candidateMax; parameter++) {
-      if (parameter == estimated) {
-        continue;
-      }
-
-      final bits =
-          _estimateRiceBitsForParameter(foldedResiduals, length, parameter);
-      if (bits < bestBits) {
-        bestBits = bits;
-        bestParameter = parameter;
-      }
-    }
-
-    return bestParameter;
-  }
-
-  int _estimateRiceBitsForParameter(
-    Int32List foldedResiduals,
-    int length,
-    int parameter,
-  ) {
-    int bits = 0;
+    // Rice parameter selection is a hot path. The folded residuals are already
+    // materialized for the eventual writer, so we score every candidate in one
+    // scan and reuse the winning encoded bit count for subframe selection.
+    int bits0 = 0;
+    int bits1 = 0;
+    int bits2 = 0;
     for (int i = 0; i < length; i++) {
-      final quotient = foldedResiduals[i] >> parameter;
-      bits += quotient + 1 + parameter;
+      final folded = foldedResiduals[i];
+      bits0 += (folded >> parameter0) + fixedBits0;
+      if (hasParameter1) {
+        bits1 += (folded >> parameter1) + fixedBits1;
+      }
+      if (hasParameter2) {
+        bits2 += (folded >> parameter2) + fixedBits2;
+      }
     }
-    return bits;
+
+    int bestParameter = parameter0;
+    int bestBits = bits0;
+    if (hasParameter1 && bits1 < bestBits) {
+      bestParameter = parameter1;
+      bestBits = bits1;
+    }
+    if (hasParameter2 && bits2 < bestBits) {
+      bestParameter = parameter2;
+      bestBits = bits2;
+    }
+
+    return (parameter: bestParameter, encodedBits: bestBits);
   }
 
   int _estimateFixedSubframeBitCount(
     int order,
-    int residualLength,
-    int riceParameter,
+    int riceEncodedBits,
   ) {
     // Subframe header + warm-up samples + residual header.
-    int bits = 8 + (order * _config.bitsPerSample) + 10;
-
-    for (int i = 0; i < residualLength; i++) {
-      final quotient = _foldedResidualScratch[i] >> riceParameter;
-      bits += quotient + 1 + riceParameter;
-    }
-
-    return bits;
+    return 8 + (order * _config.bitsPerSample) + 10 + riceEncodedBits;
   }
 
   int _estimateLpcSubframeBitCount(
     int order,
-    int residualLength,
-    int riceParameter,
     int qlpPrecision,
+    int riceEncodedBits,
   ) {
     // Subframe header + warm-up samples + LPC params + residual header.
-    int bits = 8 +
+    return 8 +
         (order * _config.bitsPerSample) +
         4 +
         5 +
         (order * qlpPrecision) +
-        10;
-
-    for (int i = 0; i < residualLength; i++) {
-      final quotient = _foldedResidualScratch[i] >> riceParameter;
-      bits += quotient + 1 + riceParameter;
-    }
-
-    return bits;
+        10 +
+        riceEncodedBits;
   }
 
   int _fixedSubframeHeaderForOrder(int order) {
@@ -792,23 +1015,28 @@ class FlacEncoder {
     }
   }
 
-  void _foldResidualsInto(
+  int _foldResidualsInto(
     Int32List residuals,
     int length,
     Int32List outFoldedResiduals,
   ) {
     // Unroll by 4 to reduce loop overhead on hot paths.
     int i = 0;
+    int sumAbs = 0;
     final unrolledEnd = length - (length % 4);
     while (i < unrolledEnd) {
       final r0 = residuals[i];
       outFoldedResiduals[i] = r0 >= 0 ? (r0 << 1) : ((-r0 << 1) - 1);
+      sumAbs += r0 >= 0 ? r0 : -r0;
       final r1 = residuals[i + 1];
       outFoldedResiduals[i + 1] = r1 >= 0 ? (r1 << 1) : ((-r1 << 1) - 1);
+      sumAbs += r1 >= 0 ? r1 : -r1;
       final r2 = residuals[i + 2];
       outFoldedResiduals[i + 2] = r2 >= 0 ? (r2 << 1) : ((-r2 << 1) - 1);
+      sumAbs += r2 >= 0 ? r2 : -r2;
       final r3 = residuals[i + 3];
       outFoldedResiduals[i + 3] = r3 >= 0 ? (r3 << 1) : ((-r3 << 1) - 1);
+      sumAbs += r3 >= 0 ? r3 : -r3;
       i += 4;
     }
 
@@ -816,8 +1044,11 @@ class FlacEncoder {
       final residual = residuals[i];
       outFoldedResiduals[i] =
           residual >= 0 ? (residual << 1) : ((-residual << 1) - 1);
+      sumAbs += residual >= 0 ? residual : -residual;
       i++;
     }
+
+    return sumAbs;
   }
 
   List<double>? _computeAutocorrelation(Samples channel, int maxOrder) {
@@ -1039,4 +1270,9 @@ typedef _QuantizedLpc = ({
   int precision,
   int shift,
   List<int> coefficients,
+});
+
+typedef _RiceCodingDecision = ({
+  int parameter,
+  int encodedBits,
 });

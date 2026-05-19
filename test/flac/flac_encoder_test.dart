@@ -58,6 +58,61 @@ void main() {
     expect(decoder.isCorrect(), isTrue);
     decoder.close();
   });
+
+  test('Encoder rejects channel counts above FLAC limit (8)', () {
+    final channels = <Samples>[
+      for (int i = 0; i < 9; i++) Int32List.fromList([0, 1, -1, 2]),
+    ];
+
+    final encoder = FlacEncoder();
+    expect(
+      () => encoder.encode(
+        channels,
+        config: const FlacEncoderConfig(
+          sampleRate: 44100,
+          bitsPerSample: 16,
+          frameBlockSize: 4,
+        ),
+      ),
+      throwsA(isA<RangeError>()),
+    );
+  });
+
+  test('Encoder rejects channels with different sample counts', () {
+    final left = Int32List.fromList([0, 1, 2, 3]);
+    final right = Int32List.fromList([0, 1, 2]);
+
+    final encoder = FlacEncoder();
+    expect(
+      () => encoder.encode(
+        <Samples>[left, right],
+        config: const FlacEncoderConfig(
+          sampleRate: 44100,
+          bitsPerSample: 16,
+          frameBlockSize: 4,
+        ),
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('Encoder rejects sample values outside configured bit depth', () {
+    final left = Int32List.fromList([0, 32768, -2, 3]); // 32768 out of int16.
+    final right = Int32List.fromList([0, 1, -2, 3]);
+
+    final encoder = FlacEncoder();
+    expect(
+      () => encoder.encode(
+        <Samples>[left, right],
+        config: const FlacEncoderConfig(
+          sampleRate: 44100,
+          bitsPerSample: 16,
+          frameBlockSize: 4,
+        ),
+      ),
+      throwsA(isA<RangeError>()),
+    );
+  });
 }
 
 List<int> _computePcmMd5(List<Samples> channels, int bitsPerSample) {
