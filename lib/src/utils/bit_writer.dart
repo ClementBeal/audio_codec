@@ -1,17 +1,41 @@
 import 'dart:typed_data';
 
 class BitWriter {
-  final BytesBuilder _bytes;
-
   // The accumulator stores bits temporarily (up to 64 bits on native Dart).
   int _accumulator = 0;
   int _bitsCount = 0;
 
-  // Fast local buffer to avoid calling BytesBuilder for every single byte.
-  final Uint8List _buffer = Uint8List(8192); // 8 KB
-  int _bufferPos = 0;
+  // FLAC frame writing is a hot path. A single growable byte buffer avoids the
+  // repeated BytesBuilder chunks and lets the encoder compute CRC16 over the
+  // already-written bytes before appending the footer.
+  Uint8List _buffer;
+  int _length = 0;
 
-  BitWriter(this._bytes);
+  BitWriter([int initialCapacity = 8192])
+      : _buffer = Uint8List(initialCapacity);
+
+  int get length => _length;
+
+  Uint8List get rawBuffer => _buffer;
+
+  void addByte(int value) {
+    _writeByte(value);
+  }
+
+  void addBytes(List<int> values) {
+    final count = values.length;
+    if (count == 0) return;
+
+    _ensureCapacity(count);
+    _buffer.setRange(_length, _length + count, values);
+    _length += count;
+  }
+
+  Uint8List toBytes() {
+    final output = Uint8List(_length);
+    output.setRange(0, _length, _buffer);
+    return output;
+  }
 
   void writeBits(int value, int bitCount) {
     if (bitCount == 0) return;
@@ -29,12 +53,7 @@ class BitWriter {
       _bitsCount -= 8;
       // Extract the highest byte.
       final byte = (_accumulator >> _bitsCount) & 0xFF;
-      _buffer[_bufferPos++] = byte;
-
-      // Flush to BytesBuilder when the local buffer is full.
-      if (_bufferPos == _buffer.length) {
-        _flushBuffer();
-      }
+      _writeByte(byte);
     }
   }
 
@@ -57,8 +76,7 @@ class BitWriter {
 
       while (_bitsCount >= 8) {
         _bitsCount -= 8;
-        _buffer[_bufferPos++] = (_accumulator >> _bitsCount) & 0xFF;
-        if (_bufferPos == _buffer.length) _flushBuffer();
+        _writeByte((_accumulator >> _bitsCount) & 0xFF);
       }
 
       remaining -= chunk;
@@ -74,26 +92,31 @@ class BitWriter {
       int shift = 8 - _bitsCount;
       _accumulator <<= shift;
 
-      _buffer[_bufferPos++] = _accumulator & 0xFF;
-      if (_bufferPos == _buffer.length) _flushBuffer();
+      _writeByte(_accumulator & 0xFF);
 
       _bitsCount = 0;
       _accumulator = 0;
     }
-
-    // Flush any remaining buffered bytes at the end of the frame.
-    if (_bufferPos > 0) {
-      _flushBuffer();
-    }
   }
 
-  void _flushBuffer() {
-    // Copy before add: _buffer is reused and mutated after flush.
-    // With BytesBuilder(copy: false), passing a view would corrupt
-    // previously appended bytes.
-    final chunk = Uint8List(_bufferPos);
-    chunk.setRange(0, _bufferPos, _buffer);
-    _bytes.add(chunk);
-    _bufferPos = 0;
+  void _writeByte(int value) {
+    _ensureCapacity(1);
+    _buffer[_length++] = value & 0xFF;
+  }
+
+  void _ensureCapacity(int additionalBytes) {
+    final requiredLength = _length + additionalBytes;
+    if (requiredLength <= _buffer.length) {
+      return;
+    }
+
+    var newCapacity = _buffer.length * 2;
+    while (newCapacity < requiredLength) {
+      newCapacity *= 2;
+    }
+
+    final next = Uint8List(newCapacity);
+    next.setRange(0, _length, _buffer);
+    _buffer = next;
   }
 }

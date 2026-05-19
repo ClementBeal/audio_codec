@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 ///  A precomputed table of all the possible value of the CRC8 for the Flac polynom
 const crc8 = [
   0x00, 0x07, 0x0e, 0x09, 0x1c, 0x1b, 0x12, 0x15, 0x38, 0x3f, 0x36, 0x31, 0x24,
@@ -41,6 +43,16 @@ int calculateCRC8(List<int> headerBytes) {
 
   for (int byte in headerBytes) {
     crc = crc8[crc ^ byte];
+  }
+
+  return crc;
+}
+
+int calculateCRC8Range(Uint8List bytes, int start, int endExclusive) {
+  int crc = 0;
+
+  for (int i = start; i < endExclusive; i++) {
+    crc = crc8[crc ^ bytes[i]];
   }
 
   return crc;
